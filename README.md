@@ -54,7 +54,7 @@ No server is *needed* for any of the above. Parsing a match takes a few millisec
 
 ## Deploying
 
-`.github/workflows/deploy.yml` tests, builds and publishes to GitHub Pages on every push to `main`. In the repo settings, set
+`.github/workflows/deploy.yml` tests, builds and publishes to GitHub Pages on every push to `master`. In the repo settings, set
 **Pages → Source** to **GitHub Actions**. The build uses relative paths, so it works under any sub-path, from the companion, or on any
 static host.
 
