@@ -38,6 +38,7 @@ export default function App() {
   const [help, setHelp] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [mobileSidebar, setMobileSidebar] = useState(false);
+  const [headSlot, setHeadSlot] = useState<HTMLDivElement | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
   // ---------- Theme ----------
@@ -222,6 +223,8 @@ export default function App() {
         hasMatches={entries.some((e) => e.summary?.isMatch)}
         logCount={entries.length}
         drawerOpen={mobileSidebar}
+        slotRef={setHeadSlot}
+        viewing={view === 'main' && !!selected}
       />
       <div className={`main ${mobileSidebar ? 'drawer-open' : ''}`}>
         {mobileSidebar && <div className="drawer-scrim" onClick={() => setMobileSidebar(false)} />}
@@ -279,6 +282,7 @@ export default function App() {
               settings={settings}
               tab={tab}
               setTab={setTab}
+              headSlot={headSlot}
               onCompare={() => {
                 setCompareSelecting(true);
                 setCompareKeys([selected.key]);

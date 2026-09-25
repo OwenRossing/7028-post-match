@@ -151,6 +151,8 @@ function overlayPlugin(group: ChartGroup, theme: ChartTheme, thresholds: Thresho
         (u) => {
           const left = u.cursor.left;
           group.setHover(left == null || left < 0 ? null : u.posToVal(left, 'x'));
+          // with no cursor the legend shows just the series names, not "Battery: –"
+          u.root.classList.toggle('idle', u.cursor.idx == null);
         },
       ],
     },
@@ -262,6 +264,7 @@ export function TimeChart({ group, x, series, axes, thresholds = [], height = 18
 
     const data = [x, ...series.map((s) => s.data)] as uPlot.AlignedData;
     const u = new uPlot(opts, data, host);
+    u.root.classList.add('idle');
     group.add(u);
 
     const onWheel = (e: WheelEvent) => {

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { computeStats, findProblems, type ChartId } from '../lib/analysis';
 import { ChartGroup, type Marker } from '../lib/chartGroup';
 import { download, eventsToCsv, logToCsv, safeFileName, summaryMarkdown } from '../lib/export';
@@ -10,6 +11,7 @@ import { makeTimeFormat } from '../lib/timefmt';
 import type { ParsedState } from '../lib/useParsed';
 import { Icon } from './Icon';
 import { KeyBar } from './KeyBar';
+import { Scrim } from './Scrim';
 import { EventsView } from './viewer/EventsView';
 import { defaultChannels, Graphs } from './viewer/Graphs';
 import { Overview } from './viewer/Overview';
@@ -24,10 +26,20 @@ interface Props {
   settings: Settings;
   tab: Tab;
   setTab: (t: Tab) => void;
+  /** The top bar's slot for the title and tabs; without one the header renders in place. */
+  headSlot?: HTMLElement | null;
   onCompare: () => void;
   onRemove?: () => void;
   toast: (title: string, msg?: string, kind?: 'info' | 'error' | 'success') => void;
 }
+
+const TABS: [Tab, string][] = [
+  ['overview', 'Summary'],
+  ['graphs', 'Graphs'],
+  ['events', 'Messages'],
+  ['power', 'Power'],
+  ['details', 'Details'],
+];
 
 function isTyping(e: KeyboardEvent) {
   const el = e.target as HTMLElement | null;
@@ -70,6 +82,7 @@ function LoadedViewer({
   settings,
   tab,
   setTab,
+  headSlot,
   onCompare,
   onRemove,
   toast,
@@ -257,110 +270,114 @@ function LoadedViewer({
   const meta = events?.meta;
   const start = log?.startTime ?? events?.startTime ?? entry.startTime;
 
-  return (
-    <div className="viewer">
-      <div className="viewer-head">
-        <div className="viewer-title">
-          <span className={`head-light ${verdict}`} title={verdict === 'ok' ? 'Healthy' : verdict === 'warn' ? 'Warnings' : 'Problems'} />
-          <div style={{ minWidth: 0 }}>
-            <h1>
-              {analysis.title}
-              {live && (
-                <span className="live-tag">
-                  <span className="live-dot" /> Live
-                </span>
-              )}
-              {refreshing && <div className="spinner" style={{ width: 13, height: 13 }} />}
-            </h1>
-            <div className="viewer-sub">
-              {[meta?.eventName, meta?.team && `Team ${meta.team}`, fmtDateTime(start)].filter(Boolean).join('  ·  ')}
-            </div>
-          </div>
-        <div className="tabs" role="tablist">
-          {(
-            [
-              ['overview', 'Summary'],
-              ['graphs', 'Graphs'],
-              ['events', 'Messages'],
-              ['power', 'Power'],
-              ['details', 'Details'],
-            ] as [Tab, string][]
-          ).map(([id, label]) => (
-            <button key={id} role="tab" aria-selected={tab === id} className={`tab ${tab === id ? 'on' : ''}`} onClick={() => setTab(id)}>
-              {label}
-            </button>
-          ))}
-        </div>
-          <div className="viewer-actions">
-            <div className="menu-wrap">
-              <button className="btn icon round" onClick={() => setMenu(menu ? null : 'more')} title="Export, compare and more" aria-label="More">
-                <Icon name="more" size={18} />
-              </button>
-              {menu && (
-                <>
-                  <div style={{ position: 'fixed', inset: 0, zIndex: 40 }} onClick={() => setMenu(null)} />
-                  <div className="menu" onClick={() => setMenu(null)}>
-                    <button className="item" onClick={exportActions.summary}>
-                      <Icon name="copy" />
-                      <span>
-                        Copy summary
-                        <small>The fix list as text for Discord / Slack</small>
-                      </span>
-                    </button>
-                    <button className="item" onClick={onCompare}>
-                      <Icon name="compare" />
-                      <span>
-                        Compare with other logs
-                        <small>Overlay up to 6 matches</small>
-                      </span>
-                    </button>
+  const tabBar = (className: string) => (
+    <div className={`tabs ${className}`} role="tablist">
+      {TABS.map(([id, label]) => (
+        <button key={id} role="tab" aria-selected={tab === id} className={`tab ${tab === id ? 'on' : ''}`} onClick={() => setTab(id)}>
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+
+  const whoWhere = [meta?.eventName, meta?.team && `Team ${meta.team}`].filter(Boolean).join(' · ');
+
+  // One row, like the prototype: light, title, where/who, tabs, export.
+  const head = (
+    <div className="vhead">
+      <span className={`head-light ${verdict}`} title={verdict === 'ok' ? 'Healthy' : verdict === 'warn' ? 'Warnings' : 'Problems'} />
+      <div className="vhead-title">
+        <h1>{analysis.title}</h1>
+        {live && (
+          <span className="live-tag">
+            <span className="live-dot" /> Live
+          </span>
+        )}
+        {refreshing && <div className="spinner" style={{ width: 13, height: 13 }} />}
+        <span className="vhead-sub">
+          {whoWhere}
+          <span className="vhead-date">
+            {whoWhere && ' · '}
+            {fmtDateTime(start)}
+          </span>
+        </span>
+      </div>
+      {tabBar('vhead-tabs')}
+      <div className="viewer-actions">
+        <div className="menu-wrap">
+          <button className="btn icon round" onClick={() => setMenu(menu ? null : 'more')} title="Export, compare and more" aria-label="Export and compare">
+            <Icon name="download" size={17} />
+          </button>
+          {menu && (
+            <>
+              <Scrim onClose={() => setMenu(null)} />
+              <div className="menu" onClick={() => setMenu(null)}>
+                <button className="item" onClick={exportActions.summary}>
+                  <Icon name="copy" />
+                  <span>
+                    Copy summary
+                    <small>The fix list as text for Discord / Slack</small>
+                  </span>
+                </button>
+                <button className="item" onClick={onCompare}>
+                  <Icon name="compare" />
+                  <span>
+                    Compare with other logs
+                    <small>Overlay up to 6 matches</small>
+                  </span>
+                </button>
+                <hr />
+                <button className="item" onClick={exportActions.csvRange} disabled={!log}>
+                  <Icon name="download" />
+                  <span>
+                    Data CSV, visible range
+                    <small>
+                      {tf.fmt(group.range.start)} → {tf.fmt(group.range.end)}
+                    </small>
+                  </span>
+                </button>
+                <button className="item" onClick={exportActions.csvAll} disabled={!log}>
+                  <Icon name="download" />
+                  <span>
+                    Data CSV, whole log
+                    <small>Every 20 ms record, all channels</small>
+                  </span>
+                </button>
+                <button className="item" onClick={exportActions.events} disabled={!events}>
+                  <Icon name="list" />
+                  <span>
+                    Messages CSV
+                    <small>All errors, warnings and prints</small>
+                  </span>
+                </button>
+                <div className="menu-note">
+                  {[meta?.dsVersion && `DS ${meta.dsVersion}`, meta?.robotLanguage && `${meta.robotLanguage} ${meta.wpilibVersion ?? ''}`, fmtSpan(analysis.duration) + ' log', entry.key]
+                    .filter(Boolean)
+                    .join(' · ')}
+                  {!entry.dslog && ' (no .dslog)'}
+                  {!entry.dsevents && ' (no .dsevents)'}
+                </div>
+                {onRemove && (
+                  <>
                     <hr />
-                    <button className="item" onClick={exportActions.csvRange} disabled={!log}>
-                      <Icon name="download" />
-                      <span>
-                        Data CSV, visible range
-                        <small>
-                          {tf.fmt(group.range.start)} → {tf.fmt(group.range.end)}
-                        </small>
-                      </span>
+                    <button className="item danger" onClick={onRemove}>
+                      <Icon name="trash" />
+                      <span>Remove from library</span>
                     </button>
-                    <button className="item" onClick={exportActions.csvAll} disabled={!log}>
-                      <Icon name="download" />
-                      <span>
-                        Data CSV, whole log
-                        <small>Every 20 ms record, all channels</small>
-                      </span>
-                    </button>
-                    <button className="item" onClick={exportActions.events} disabled={!events}>
-                      <Icon name="list" />
-                      <span>
-                        Messages CSV
-                        <small>All errors, warnings and prints</small>
-                      </span>
-                    </button>
-                    <div className="menu-note">
-                      {[meta?.dsVersion && `DS ${meta.dsVersion}`, meta?.robotLanguage && `${meta.robotLanguage} ${meta.wpilibVersion ?? ''}`, fmtSpan(analysis.duration) + ' log', entry.key]
-                        .filter(Boolean)
-                        .join(' · ')}
-                      {!entry.dslog && ' (no .dslog)'}
-                      {!entry.dsevents && ' (no .dsevents)'}
-                    </div>
-                    {onRemove && (
-                      <>
-                        <hr />
-                        <button className="item danger" onClick={onRemove}>
-                          <Icon name="trash" />
-                          <span>Remove from library</span>
-                        </button>
-                      </>
-                    )}
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
+                  </>
+                )}
+              </div>
+            </>
+          )}
         </div>
       </div>
+    </div>
+  );
+
+  return (
+    <div className="viewer">
+      {headSlot ? createPortal(head, headSlot) : <div className="viewer-head">{head}</div>}
+      {tabBar('tabs-strip')}
       {parsed.warnings.length > 0 && (
         <div style={{ padding: '12px 20px 0' }}>
           <div className="banner">

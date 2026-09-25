@@ -19,16 +19,15 @@ export function parseLogName(name: string): number | null {
 /** Formats seconds as m:ss.s (or h:mm:ss for long spans). Negative values get a leading minus. */
 export function fmtDuration(sec: number, decimals = 1): string {
   if (!Number.isFinite(sec)) return '–';
-  const neg = sec < 0;
-  let s = Math.abs(sec);
-  const h = Math.floor(s / 3600);
-  s -= h * 3600;
-  const m = Math.floor(s / 60);
-  s -= m * 60;
-  let secStr = s.toFixed(decimals);
-  if (secStr.startsWith('60')) secStr = (0).toFixed(decimals); // rounding edge
-  const pad = decimals > 0 ? 3 + decimals : 2;
-  secStr = secStr.padStart(pad, '0');
+  // round once, in whole display units, so 59.996 s carries to 1:00.00 instead of showing 0:00.00
+  const scale = 10 ** decimals;
+  const units = Math.round(Math.abs(sec) * scale);
+  const neg = sec < 0 && units > 0;
+  const whole = Math.floor(units / scale);
+  const h = Math.floor(whole / 3600);
+  const m = Math.floor((whole % 3600) / 60);
+  const frac = decimals > 0 ? `.${String(units % scale).padStart(decimals, '0')}` : '';
+  const secStr = String(whole % 60).padStart(2, '0') + frac;
   const body = h > 0 ? `${h}:${String(m).padStart(2, '0')}:${secStr}` : `${m}:${secStr}`;
   return (neg ? '-' : '') + body;
 }

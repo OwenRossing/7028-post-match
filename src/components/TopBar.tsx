@@ -4,6 +4,7 @@ import { updateSettings, type Settings } from '../lib/settings';
 import type { ThemePref } from '../lib/theme';
 import type { Library } from '../lib/useLibrary';
 import { Icon } from './Icon';
+import { Scrim } from './Scrim';
 
 interface Props {
   library: Library;
@@ -16,20 +17,23 @@ interface Props {
   hasMatches: boolean;
   logCount: number;
   drawerOpen: boolean;
+  /** Where the open log puts its title and tabs, so the viewer needs no second header row. */
+  slotRef: (el: HTMLDivElement | null) => void;
+  viewing: boolean;
 }
 
 /**
  * Three things on the bar: your logs, the latest match, open files. Everything
  * else (DS folder, companion, theme, help) lives in the ⋯ menu.
  */
-export function TopBar({ library, settings, onOpenFiles, onLatestMatch, onHelp, onToggleSidebar, onHome, hasMatches, logCount, drawerOpen }: Props) {
+export function TopBar({ library, settings, onOpenFiles, onLatestMatch, onHelp, onToggleSidebar, onHome, hasMatches, logCount, drawerOpen, slotRef, viewing }: Props) {
   const [menu, setMenu] = useState(false);
   const [url, setUrl] = useState(settings.companionUrl);
   const { folder, companion } = library;
   const watching = folder.status === 'connected' || companion.status === 'connected';
 
   return (
-    <header className="topbar">
+    <header className={`topbar ${viewing ? 'viewing' : ''}`}>
       <button className={`btn quiet ${drawerOpen ? 'active' : ''}`} onClick={onToggleSidebar} title="Your logs (S)" aria-expanded={drawerOpen}>
         <Icon name="list" size={17} />
         <span className="hide-xs">Logs</span>
@@ -40,7 +44,7 @@ export function TopBar({ library, settings, onOpenFiles, onLatestMatch, onHelp, 
         <span className="brand-name">PitView</span>
       </button>
 
-      <span className="spacer" />
+      <div className="topbar-slot" ref={slotRef} />
 
       {folder.status === 'needs-permission' && (
         <button className="btn pill warn-pill" onClick={() => library.reconnectFolder()} title="The browser needs your OK to read the folder again">
@@ -48,7 +52,7 @@ export function TopBar({ library, settings, onOpenFiles, onLatestMatch, onHelp, 
         </button>
       )}
       {hasMatches && (
-        <button className="btn pill primary" onClick={onLatestMatch} title="Open the most recent match (L)">
+        <button className="btn pill primary latest-btn" onClick={onLatestMatch} title="Open the most recent match (L)">
           <span className="hide-xs">Latest match</span>
           <span className="show-xs">Latest</span>
         </button>
@@ -64,7 +68,7 @@ export function TopBar({ library, settings, onOpenFiles, onLatestMatch, onHelp, 
         </button>
         {menu && (
           <>
-            <div style={{ position: 'fixed', inset: 0, zIndex: 40 }} onClick={() => setMenu(false)} />
+            <Scrim onClose={() => setMenu(false)} />
             <div className="menu" style={{ width: 330 }}>
               <div className="menu-label">Driver Station</div>
               {folder.status === 'connected' ? (
