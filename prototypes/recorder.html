@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Prototype 2 · Flight recorder</title>
+<link rel="stylesheet" href="proto.css" />
+<style>
+  .stage { position: absolute; top: 64px; bottom: 52px; left: 0; right: 0; display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; padding: 8px 28px 20px; }
+  .tape { background: var(--panel); border-radius: 24px; padding: 18px 20px 14px; display: grid; grid-template-columns: 96px minmax(0, 1fr); grid-template-rows: 44px repeat(5, minmax(0, 1fr)) 22px; row-gap: 8px; min-height: 0; position: relative; }
+  .lab { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--muted); }
+  .lab .light { width: 10px; height: 10px; }
+  .lane { position: relative; background: var(--panel-2); border-radius: 12px; overflow: hidden; }
+  .lane svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .ruler { position: relative; }
+  .phase { position: absolute; top: 4px; height: 12px; border-radius: 4px; }
+  .flag { position: absolute; top: 20px; transform: translateX(-50%); width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 800; color: #fff; }
+  .flag.bad { background: var(--bad); }
+  .flag.warn { background: var(--warn); }
+  .flag.on { outline: 3px solid var(--text); outline-offset: 2px; }
+  .ticks { position: relative; font-size: 12px; color: var(--faint); }
+  .ticks span { position: absolute; transform: translateX(-50%); }
+  .cursor { position: absolute; top: 18px; bottom: 36px; width: 2px; background: var(--text); pointer-events: none; }
+  .cursor::before { content: ''; position: absolute; top: -6px; left: -5px; border: 6px solid transparent; border-top-color: var(--text); }
+
+  .read { background: var(--panel); border-radius: 24px; padding: 24px; display: flex; flex-direction: column; gap: 18px; }
+  .read .clock { font-size: 58px; font-weight: 700; line-height: 1; }
+  .read .clock small { display: block; font-size: 14px; color: var(--muted); font-weight: 600; margin-top: 6px; letter-spacing: 0; }
+  .inc { min-height: 64px; display: flex; gap: 10px; align-items: flex-start; font-size: 17px; font-weight: 600; line-height: 1.25; }
+  .inc .light { margin-top: 3px; }
+  .inc small { display: block; font-weight: 400; color: var(--muted); font-size: 14px; margin-top: 4px; }
+  .vals { display: grid; grid-template-columns: auto 1fr; row-gap: 12px; column-gap: 16px; align-items: baseline; }
+  .vals dt { color: var(--muted); font-size: 14px; }
+  .vals dd { margin: 0; text-align: right; font-size: 26px; font-weight: 700; }
+  .vals dd small { font-size: 14px; color: var(--muted); font-weight: 600; margin-left: 3px; }
+  .vals dd.bad { color: var(--bad); }
+  .vals dd.warn { color: var(--warn); }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="tape" id="tape"></div>
+  <div class="read" id="read"></div>
+</div>
+<script src="sample-data.js"></script>
+<script src="proto.js"></script>
+<script>
+header(2);
+keybar([['← →', 'scrub'], ['J K', 'next / prev incident'], ['A T M', 'auto · teleop · match'], ['+ −', 'zoom'], ['space', 'checked it']]);
+
+const st = S.stats;
+const INC = S.problems.filter((p) => p.t != null && p.t >= S.start && p.t <= S.end && p.severity !== 'info').sort((a, b) => a.t - b.t);
+let view = [S.start, S.end];
+let cur = INC.length ? INC[0].t : 0;
+
+const LANES = [
+  { key: 'battery', label: 'Battery', sys: 'battery' },
+  { key: 'current', label: 'Current', sys: 'power' },
+  { key: 'comms', label: 'Comms', sys: 'radio' },
+  { key: 'code', label: 'Code', sys: 'code' },
+  { key: 'msgs', label: 'Errors', sys: 'can' },
+];
+
+function laneSvg(key) {
+  const w = 1000, h = 100, o = { w, h, t0: view[0], t1: view[1] };
+  const red = cssVar('--bad'), warn = cssVar('--warn'), blue = cssVar('--accent'), good = cssVar('--good'), muted = cssVar('--faint');
+  if (key === 'battery') {
+    const low = [];
+    S.series.v.forEach((v, i) => { if (v != null && v < 7) low.push({ start: S.series.t[i], end: S.series.t[i] + 0.25, color: 'rgba(255,69,58,.35)' }); });
+    return spark(S.series.v, { ...o, min: 5, max: 14, color: cssVar('--auto'), spans: low, threshold: { v: 7, color: red } });
+  }
+  if (key === 'current') return spark(S.series.i, { ...o, min: 0, color: blue, fill: 'rgba(10,132,255,.18)' });
+  if (key === 'comms') {
+    // solid green bar while connected, red where the robot went silent
+    const spans = [{ start: S.start, end: S.end, color: 'rgba(48,209,88,.25)' }].concat(S.noComms.map((s) => ({ ...s, color: red })));
+    return spark(S.series.trip.map(() => null), { ...o, min: 0, max: 1, color: 'none', spans });
+  }
+  if (key === 'code') return spark(S.series.cpu, { ...o, min: 0, max: 100, color: muted, spans: S.stalls.map((s) => ({ start: s.start, end: s.end + 0.2, color: warn })) });
+  if (key === 'msgs') return spark(S.series.t.map(() => null), { ...o, min: 0, max: 1, color: 'none', marks: S.events.map((e) => ({ t: e.t, color: e.kind === 'error' ? red : warn })) });
+  return '';
+}
+
+function xPct(t) { return ((t - view[0]) / (view[1] - view[0])) * 100; }
+
+function render() {
+  const tape = document.getElementById('tape');
+  const ticks = [];
+  const span = view[1] - view[0];
+  const step = span > 120 ? 30 : span > 50 ? 10 : span > 20 ? 5 : 1;
+  for (let t = Math.ceil(view[0] / step) * step; t <= view[1]; t += step) ticks.push(t);
+  const phase = (p, color) => p && `<div class="phase" style="left:${Math.max(0, xPct(p.start))}%;width:${Math.max(0, Math.min(100, xPct(p.end)) - Math.max(0, xPct(p.start)))}%;background:${color}"></div>`;
+  tape.innerHTML = `
+    <div></div>
+    <div class="ruler">${phase(S.auto, 'var(--auto)')}${phase(S.teleop, 'var(--teleop)')}
+      ${INC.map((p, i) => (p.t >= view[0] && p.t <= view[1] ? `<div class="flag ${p.severity} ${Math.abs(p.t - cur) < 0.01 ? 'on' : ''}" style="left:${xPct(p.t)}%">${i + 1}</div>` : '')).join('')}
+    </div>
+    ${LANES.map((l) => `<div class="lab"><span class="light ${statusOf(l.sys)}"></span>${l.label}</div><div class="lane">${laneSvg(l.key)}</div>`).join('')}
+    <div></div>
+    <div class="ticks">${ticks.map((t) => `<span style="left:${xPct(t)}%">${clock(t)}</span>`).join('')}</div>
+    <div class="cursor" id="cursor"></div>`;
+  // cursor spans the lanes column
+  const lanes = tape.querySelector('.ruler').getBoundingClientRect();
+  const tr = tape.getBoundingClientRect();
+  const c = document.getElementById('cursor');
+  c.style.left = lanes.left - tr.left + (xPct(cur) / 100) * lanes.width + 'px';
+  c.style.display = cur < view[0] || cur > view[1] ? 'none' : 'block';
+
+  // readout at the cursor
+  const near = INC.find((p) => Math.abs(p.t - cur) < 1.5);
+  const v = at(S.series.v, cur), a = at(S.series.i, cur), cpu = at(S.series.cpu, cur);
+  const commsOk = !S.noComms.some((s) => cur >= s.start && cur <= s.end);
+  const phaseName = S.auto && cur >= S.auto.start && cur <= S.auto.end ? 'Auto' : S.teleop && cur >= S.teleop.start && cur <= S.teleop.end ? 'Teleop' : 'Disabled';
+  document.getElementById('read').innerHTML = `
+    <div class="clock num">${clock(cur)}<small>${phaseName}</small></div>
+    <div class="inc">${near ? `<span class="light ${near.severity}"></span><span>${near.title}${near.fix ? `<small>${near.fix}</small>` : ''}</span>` : ''}</div>
+    <dl class="vals">
+      <dt>Battery</dt><dd class="num ${v != null && v < 7 ? 'bad' : v < 8 ? 'warn' : ''}">${v != null ? v.toFixed(1) : '–'}<small>V</small></dd>
+      <dt>Current</dt><dd class="num">${Math.round(a)}<small>A</small></dd>
+      <dt>Comms</dt><dd class="${commsOk ? '' : 'bad'}">${commsOk ? '✓' : '✕'}</dd>
+      <dt>CPU</dt><dd class="num">${Math.round(cpu)}<small>%</small></dd>
+    </dl>`;
+}
+
+function zoomTo(a, b) { view = [Math.max(S.start, a), Math.min(S.end, b)]; if (cur < view[0] || cur > view[1]) cur = (view[0] + view[1]) / 2; render(); }
+function zoom(f) {
+  const w = (view[1] - view[0]) * f;
+  zoomTo(cur - w / 2, cur + w / 2);
+}
+window.addEventListener('keydown', (e) => {
+  const k = e.key.toLowerCase();
+  const stepS = e.shiftKey ? 10 : 1;
+  if (e.key === 'ArrowRight') cur = Math.min(S.end, cur + stepS);
+  else if (e.key === 'ArrowLeft') cur = Math.max(S.start, cur - stepS);
+  else if (k === 'j' || e.key === 'Tab') { const n = INC.find((p) => p.t > cur + 0.01); if (n) cur = n.t; e.preventDefault(); }
+  else if (k === 'k') { const n = [...INC].reverse().find((p) => p.t < cur - 0.01); if (n) cur = n.t; }
+  else if (k === 'a' && S.auto) return zoomTo(S.auto.start - 2, S.auto.end + 2);
+  else if (k === 't' && S.teleop) return zoomTo(S.teleop.start - 2, S.teleop.end + 2);
+  else if (k === 'm' || k === 'f') return zoomTo(S.start, S.end);
+  else if (e.key === '+' || e.key === '=') return zoom(0.5);
+  else if (e.key === '-') return zoom(2);
+  else return;
+  if (cur < view[0] || cur > view[1]) { const w = view[1] - view[0]; view = [Math.max(S.start, cur - w / 2), Math.min(S.end, cur + w / 2)]; }
+  e.preventDefault();
+  render();
+});
+document.getElementById('tape').addEventListener('click', (e) => {
+  const r = document.querySelector('.ruler').getBoundingClientRect();
+  cur = view[0] + ((e.clientX - r.left) / r.width) * (view[1] - view[0]);
+  render();
+});
+window.addEventListener('resize', render);
+render();
+</script>
+</body>
+</html>

@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Prototype 3 · Instruments</title>
+<link rel="stylesheet" href="proto.css" />
+<style>
+  .grid { position: absolute; top: 64px; bottom: 52px; left: 0; right: 0; padding: 8px 28px 20px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); gap: 16px; }
+  .tile { background: var(--panel); border-radius: 26px; padding: 20px 22px 16px; display: flex; flex-direction: column; min-height: 0; position: relative; border: 3px solid transparent; transition: transform 0.12s, border-color 0.12s, opacity 0.2s; overflow: hidden; }
+  .tile.bad { background: linear-gradient(var(--bad-bg), var(--bad-bg)), var(--panel); }
+  .tile.warn { background: linear-gradient(var(--warn-bg), var(--warn-bg)), var(--panel); }
+  .tile.focus { border-color: var(--accent); transform: scale(1.02); z-index: 2; }
+  .tile.done { opacity: 0.35; }
+  .t-head { display: flex; align-items: center; gap: 10px; font-size: 15px; font-weight: 600; color: var(--muted); }
+  .t-head .grow { flex: 1; }
+  .tick { color: var(--good); font-weight: 800; font-size: 18px; display: none; }
+  .tile.done .tick { display: inline; }
+  .t-val { font-size: 64px; font-weight: 700; line-height: 1; margin-top: auto; }
+  .t-val small { font-size: 20px; color: var(--muted); font-weight: 600; margin-left: 4px; }
+  .tile.bad .t-val { color: var(--bad); }
+  .tile.warn .t-val { color: var(--warn); }
+  .t-sub { font-size: 14px; color: var(--muted); margin-top: 6px; min-height: 18px; }
+  .t-spark { height: 46px; margin-top: 12px; }
+  .gauge { margin: 4px auto 0; width: 100%; max-width: 240px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+  .chips i { width: 16px; height: 16px; border-radius: 5px; background: var(--warn); }
+
+  .full { position: fixed; z-index: 20; inset: 64px 0 52px 0; background: var(--bg); display: none; padding: 24px 40px; flex-direction: column; gap: 18px; }
+  .full.on { display: flex; }
+  .full .row { display: flex; align-items: baseline; gap: 20px; }
+  .full h2 { margin: 0; font-size: 30px; }
+  .full .fv { font-size: 80px; font-weight: 700; line-height: 1; }
+  .full .fv small { font-size: 26px; color: var(--muted); margin-left: 6px; }
+  .full .chart { flex: 1; background: var(--panel); border-radius: 22px; padding: 20px; min-height: 0; }
+  .full .chart svg { height: 100%; }
+  .full .fixes { display: flex; flex-direction: column; gap: 10px; font-size: 19px; font-weight: 600; }
+  .full .fixes small { display: block; font-size: 16px; font-weight: 400; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="grid" id="grid"></div>
+<div class="full" id="full"></div>
+<script src="sample-data.js"></script>
+<script src="proto.js"></script>
+<script>
+header(3);
+keybar([['← → ↑ ↓', 'move'], ['enter', 'full screen'], ['space', 'checked it'], ['N', 'next problem'], ['esc', 'back']]);
+
+const st = S.stats;
+const red = cssVar('--bad'), warn = cssVar('--warn'), blue = cssVar('--accent'), faint = cssVar('--faint');
+const rail = S.problems.find((p) => p.id.startsWith('rail-'));
+const railN = rail ? +(rail.title.match(/(\d+)×/) || [0, 0])[1] : 0;
+const loop = S.problems.find((p) => p.id === 'loop');
+const loopN = loop ? +(loop.title.match(/(\d+)×/) || [0, 0])[1] : 0;
+const canTotal = S.canDevices.reduce((a, d) => a + d.count, 0);
+const byId = (id) => S.problems.find((p) => p.id === id);
+const sev = (ids) => { const ps = S.problems.filter((p) => ids.includes(p.id)); return ps.some((p) => p.severity === 'bad') ? 'bad' : ps.some((p) => p.severity === 'warn') ? 'warn' : 'ok'; };
+
+/** Battery dial: 6-13 V, red below 7, amber below 8, needle at the lowest point. */
+function gauge(v) {
+  const min = 6, max = 13, cx = 120, cy = 110, r = 90;
+  const ang = (x) => Math.PI * (1 - (Math.min(max, Math.max(min, x)) - min) / (max - min));
+  const pt = (a, rr = r) => `${(cx + rr * Math.cos(a)).toFixed(1)},${(cy - rr * Math.sin(a)).toFixed(1)}`;
+  const arc = (a0, a1, color) => `<path d="M${pt(ang(a0))} A${r},${r} 0 0 1 ${pt(ang(a1))}" stroke="${color}" stroke-width="16" fill="none" />`;
+  const a = ang(v);
+  return `<svg class="gauge" viewBox="0 0 240 130">
+    ${arc(6, 7, red)}${arc(7, 8, warn)}${arc(8, 13, 'var(--line)')}
+    <line x1="${cx}" y1="${cy}" x2="${(cx + (r - 18) * Math.cos(a)).toFixed(1)}" y2="${(cy - (r - 18) * Math.sin(a)).toFixed(1)}" stroke="var(--text)" stroke-width="5" stroke-linecap="round" />
+    <circle cx="${cx}" cy="${cy}" r="8" fill="var(--text)" />
+  </svg>`;
+}
+const W = 400, H = 46;
+const TILES = [
+  { key: 'battery', label: 'Battery', ids: ['brownout', 'brownout-counter', 'volt-low', 'volt-sag', 'volt-start'], val: `${st.vmin}<small>V low</small>`, sub: `rests at ${st.vrest} V`, top: gauge(st.vmin),
+    chart: (w, h) => spark(S.series.v, { w, h, min: 5, max: 14, color: cssVar('--auto'), threshold: { v: 7, color: red }, marks: [{ t: st.vminT, color: red }] }) },
+  { key: 'power', label: 'Power', ids: [], val: `${st.peakA}<small>A peak</small>`, sub: `${st.ah} Ah used`,
+    chart: (w, h) => spark(S.series.i, { w, h, min: 0, color: blue, fill: 'rgba(10,132,255,.18)' }) },
+  { key: 'rio', label: 'roboRIO', ids: ['rail-v12', 'rail-v5', 'rail-v3_3', 'rio-mem', 'cpu'], val: railN ? `${railN}<small>rail faults</small>` : `${st.cpuAvg}<small>% CPU</small>`, sub: railN ? '12 V output shut off' : '',
+    chart: (w, h) => spark(S.series.cpu, { w, h, min: 0, max: 100, color: faint, marks: rail && rail.t != null ? [{ t: rail.t, color: red }] : [] }) },
+  { key: 'comms', label: 'Comms', ids: ['comms-enabled', 'comms', 'network', 'radio-fw'], val: `${st.enabledDrops}<small>${st.enabledDrops === 1 ? 'drop' : 'drops'}</small>`, sub: `${st.tripAvg} ms trip`,
+    chart: (w, h) => spark(S.series.trip, { w, h, min: 0, color: faint, spans: S.noComms.map((s) => ({ ...s, end: s.end + 0.5, color: red })) }) },
+  { key: 'code', label: 'Code', ids: ['code-stall', 'crash', 'watchdog'], val: `${st.stallTime}<small>s frozen</small>`, sub: `${st.stallCount} short freezes`,
+    chart: (w, h) => spark(S.series.cpu.map(() => 0), { w, h, min: 0, max: 1, color: 'none', spans: S.stalls.map((s) => ({ start: s.start, end: s.end + 0.3, color: warn })) }) },
+  { key: 'loop', label: 'Loop', ids: ['loop'], val: `${loopN}<small>overruns</small>`, sub: S.loop[0] ? `worst ${S.loop[0].ms} ms` : '',
+    chart: (w, h) => spark(S.series.t.map(() => null), { w, h, min: 0, max: 1, color: 'none', marks: S.events.filter((e) => e.tags.includes('loop')).map((e) => ({ t: e.t, color: warn })) }) },
+  { key: 'can', label: 'CAN', ids: ['can-devices', 'can-util'], val: `${canTotal}<small>msgs</small>`, sub: `${S.canDevices.length} devices`,
+    extra: `<div class="chips">${S.canDevices.map((d) => `<i title="${d.device}"></i>`).join('')}</div>`,
+    chart: (w, h) => spark(S.series.can, { w, h, min: 0, max: 100, color: faint, marks: S.events.filter((e) => e.tags.includes('can')).map((e) => ({ t: e.t, color: warn })) }) },
+  { key: 'errors', label: 'Errors', ids: ['errors'], val: `${st.errors}<small>errors</small>`, sub: `${st.warnings} warnings`,
+    chart: (w, h) => spark(S.series.t.map(() => null), { w, h, min: 0, max: 1, color: 'none', marks: S.events.map((e) => ({ t: e.t, color: e.kind === 'error' ? red : warn })) }) },
+];
+TILES.forEach((t) => (t.status = t.key === 'power' ? (st.brownouts ? 'bad' : 'ok') : sev(t.ids)));
+let focus = TILES.findIndex((t) => t.status === 'bad');
+if (focus < 0) focus = 0;
+
+function render() {
+  document.getElementById('grid').innerHTML = TILES.map((t, i) => `
+    <div class="tile ${t.status} ${i === focus ? 'focus' : ''} ${checked.has(t.key) ? 'done' : ''}" data-i="${i}">
+      <div class="t-head"><span class="light ${t.status}"></span>${t.label}<span class="grow"></span><span class="tick">✓</span></div>
+      ${t.top || ''}
+      <div class="t-val num">${t.val}</div>
+      <div class="t-sub">${t.sub}</div>
+      ${t.extra || ''}
+      <div class="t-spark">${t.chart(W, H)}</div>
+    </div>`).join('');
+  document.querySelectorAll('.tile').forEach((el) => el.addEventListener('click', () => { focus = +el.dataset.i; render(); }));
+}
+function openFull() {
+  const t = TILES[focus];
+  const fixes = S.problems.filter((p) => t.ids.includes(p.id));
+  const el = document.getElementById('full');
+  el.innerHTML = `
+    <div class="row"><span class="light big-light ${t.status}"></span><h2>${t.label}</h2><span class="fv num" style="color:${t.status === 'ok' ? 'var(--text)' : `var(--${t.status})`}">${t.val}</span></div>
+    <div class="chart">${t.chart(1600, 420)}</div>
+    <div class="fixes">${fixes.length ? fixes.map((p) => `<div>${p.title}<small>${p.fix || ''}</small></div>`).join('') : '<div style="color:var(--good)">✓ Nothing wrong here</div>'}</div>`;
+  el.classList.add('on');
+}
+window.addEventListener('keydown', (e) => {
+  const full = document.getElementById('full');
+  if (e.key === 'Escape') { full.classList.remove('on'); return; }
+  if (full.classList.contains('on') && e.key !== 'Enter') return;
+  const cols = 4;
+  if (e.key === 'ArrowRight') focus = Math.min(TILES.length - 1, focus + 1);
+  else if (e.key === 'ArrowLeft') focus = Math.max(0, focus - 1);
+  else if (e.key === 'ArrowDown') focus = Math.min(TILES.length - 1, focus + cols);
+  else if (e.key === 'ArrowUp') focus = Math.max(0, focus - cols);
+  else if (e.key === ' ') toggleChecked(TILES[focus].key);
+  else if (e.key === 'Enter') { if (full.classList.contains('on')) full.classList.remove('on'); else openFull(); return; }
+  else if (e.key.toLowerCase() === 'n') {
+    const bad = TILES.map((t, i) => i).filter((i) => TILES[i].status !== 'ok' && !checked.has(TILES[i].key));
+    if (bad.length) focus = bad.find((i) => i > focus) ?? bad[0];
+  } else return;
+  e.preventDefault();
+  render();
+});
+render();
+</script>
+</body>
+</html>

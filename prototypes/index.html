@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PitView design prototypes</title>
+<link rel="stylesheet" href="proto.css" />
+<style>
+  main { height: 100%; display: grid; place-items: center; }
+  .pick { display: flex; gap: 20px; }
+  a.card { width: 260px; padding: 26px; border-radius: 24px; background: var(--panel); color: var(--text); text-decoration: none; display: flex; flex-direction: column; gap: 12px; }
+  a.card:hover { outline: 3px solid var(--accent); }
+  a.card b { font-size: 22px; }
+  a.card span { color: var(--muted); font-size: 15px; }
+  h1 { text-align: center; font-size: 28px; margin: 0 0 24px; }
+</style>
+</head>
+<body>
+<main>
+  <div>
+    <h1>Pick a direction</h1>
+    <div class="pick">
+      <a class="card" href="robot.html"><kbd>1</kbd><b>Robot map</b></a>
+      <a class="card" href="recorder.html"><kbd>2</kbd><b>Flight recorder</b></a>
+      <a class="card" href="instruments.html"><kbd>3</kbd><b>Instruments</b></a>
+    </div>
+  </div>
+</main>
+<script>
+  addEventListener('keydown', (e) => { if (['1', '2', '3'].includes(e.key)) location.href = ['robot', 'recorder', 'instruments'][+e.key - 1] + '.html'; });
+</script>
+</body>
+</html>

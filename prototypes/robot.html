@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Prototype 1 · Robot map</title>
+<link rel="stylesheet" href="proto.css" />
+<style>
+  .stage { position: absolute; top: 64px; bottom: 52px; left: 0; right: 0; display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(360px, 1fr); }
+  .map { position: relative; margin: 20px 10px 24px 28px; }
+  .map svg.wires { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .wire { stroke: var(--line); stroke-width: 3; fill: none; }
+  .wire.hot { stroke: var(--bad); stroke-dasharray: 6 6; }
+  .node {
+    position: absolute; width: 18%; min-width: 132px; transform: translate(-50%, -50%);
+    background: var(--panel); border-radius: 22px; padding: 16px 16px 14px;
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+    border: 3px solid transparent; transition: transform 0.12s, border-color 0.12s, opacity 0.2s;
+  }
+  .node .ico { width: 34px; height: 34px; color: var(--muted); }
+  .node .lbl { font-size: 14px; color: var(--muted); font-weight: 600; }
+  .node .val { font-size: 32px; font-weight: 700; line-height: 1; }
+  .node .val small { font-size: 15px; font-weight: 600; color: var(--muted); margin-left: 2px; }
+  .node .corner { position: absolute; top: 12px; right: 12px; }
+  .node.bad { background: linear-gradient(var(--bad-bg), var(--bad-bg)), var(--panel); }
+  .node.bad .val, .node.bad .ico { color: var(--bad); }
+  .node.warn { background: linear-gradient(var(--warn-bg), var(--warn-bg)), var(--panel); }
+  .node.warn .val, .node.warn .ico { color: var(--warn); }
+  .node.focus { border-color: var(--accent); transform: translate(-50%, -50%) scale(1.06); z-index: 2; box-shadow: 0 16px 40px rgba(0,0,0,.25); }
+  .node.done { opacity: 0.35; }
+  .node.done .corner::after { content: '✓'; font-weight: 800; color: var(--good); font-size: 18px; }
+  .node.done .corner .light { display: none; }
+  .bars { display: flex; align-items: flex-end; gap: 3px; height: 34px; }
+  .bars i { width: 7px; border-radius: 3px 3px 0 0; background: var(--muted); opacity: 0.7; }
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; justify-content: center; max-width: 150px; }
+  .chips i { width: 12px; height: 12px; border-radius: 4px; background: var(--warn); }
+  .chips i.ok { background: var(--line); }
+
+  .detail { margin: 20px 28px 24px 10px; background: var(--panel); border-radius: 26px; padding: 26px; display: flex; flex-direction: column; gap: 18px; min-height: 0; }
+  .detail .top { display: flex; align-items: center; gap: 12px; }
+  .detail h2 { margin: 0; font-size: 30px; letter-spacing: -0.02em; }
+  .detail .big { font-size: 64px; font-weight: 700; line-height: 1; }
+  .detail .big small { font-size: 22px; color: var(--muted); font-weight: 600; margin-left: 4px; }
+  .detail .chart { background: var(--panel-2); border-radius: 16px; padding: 14px 14px 6px; }
+  .detail .axis { display: flex; justify-content: space-between; font-size: 12px; color: var(--faint); margin-top: 4px; }
+  .todo { display: flex; flex-direction: column; gap: 10px; overflow: auto; }
+  .todo div { display: flex; gap: 12px; align-items: flex-start; font-size: 17px; font-weight: 600; }
+  .todo div .light { margin-top: 5px; }
+  .todo div small { display: block; font-weight: 400; font-size: 15px; color: var(--muted); margin-top: 2px; }
+  .okmsg { font-size: 20px; color: var(--good); font-weight: 600; }
+
+  .full { position: fixed; z-index: 20; inset: 64px 0 52px 0; background: var(--bg); display: none; padding: 30px 40px; flex-direction: column; gap: 16px; }
+  .full.on { display: flex; }
+  .full h2 { margin: 0; font-size: 28px; }
+  .full .chart { flex: 1; background: var(--panel); border-radius: 22px; padding: 20px; display: flex; flex-direction: column; }
+  .full .chart .sv { flex: 1; }
+  .full .chart .sv svg { height: 100%; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="map" id="map"><svg class="wires" id="wires"></svg></div>
+  <div class="detail" id="detail"></div>
+</div>
+<div class="full" id="full"></div>
+<script src="sample-data.js"></script>
+<script src="proto.js"></script>
+<script>
+header(1);
+keybar([['← → ↑ ↓', 'move'], ['space', 'checked it'], ['enter', 'full graph'], ['N', 'next problem'], ['esc', 'back']]);
+
+const ICON = {
+  battery: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="2" y="7" width="17" height="10" rx="2"/><path d="M22 11v2M6 10v4M10 10v4"/></svg>',
+  power: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg>',
+  rio: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></svg>',
+  radio: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12.6a10 10 0 0 1 14 0M8.5 16.1a5 5 0 0 1 7 0M2 8.8a15 15 0 0 1 20 0"/><circle cx="12" cy="20" r="1"/></svg>',
+  code: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m8 7-5 5 5 5M16 7l5 5-5 5"/></svg>',
+  can: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 12h20"/><circle cx="6" cy="12" r="2.5"/><circle cx="12" cy="12" r="2.5"/><circle cx="18" cy="12" r="2.5"/></svg>',
+  motors: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2"/><path d="M12 4v4M12 16v4M4 12h4M16 12h4"/></svg>',
+};
+
+const st = S.stats;
+const canTotal = S.canDevices.reduce((a, d) => a + d.count, 0);
+const railFaults = S.problems.find((p) => p.id.startsWith('rail-'));
+const railN = railFaults ? +(railFaults.title.match(/(\d+)×/) || [0, 0])[1] : 0;
+const loopN = (S.problems.find((p) => p.id === 'loop')?.title.match(/(\d+)×/) || [0, 0])[1];
+const maxAh = Math.max(...S.channels.map((c) => c.ah));
+
+// x,y in percent of the map area
+const NODES = {
+  battery: { x: 12, y: 30, sys: 'battery', label: 'Battery', val: `${st.vmin}<small>V</small>` },
+  power: { x: 37, y: 30, sys: 'power', label: 'Power', val: `${st.peakA}<small>A</small>` },
+  rio: { x: 63, y: 30, sys: 'rio', label: 'roboRIO', val: railN ? `${railN}<small>faults</small>` : '<small>OK</small>' },
+  radio: { x: 88, y: 30, sys: 'radio', label: 'Radio', val: `${st.enabledDrops}<small>${st.enabledDrops === 1 ? 'drop' : 'drops'}</small>` },
+  motors: { x: 37, y: 76, sys: 'power', label: 'Motors', val: '', extra: `<div class="bars">${S.channels.map((c) => `<i style="height:${Math.max(8, (c.ah / maxAh) * 100)}%"></i>`).join('')}</div>` },
+  code: { x: 63, y: 76, sys: 'code', label: 'Code', val: `${st.stallTime}<small>s frozen</small>` },
+  can: { x: 88, y: 76, sys: 'can', label: 'CAN', val: `${canTotal}<small>msgs</small>`, extra: `<div class="chips">${S.canDevices.map((d) => `<i title="${d.device}"></i>`).join('')}</div>` },
+};
+const WIRES = [['battery', 'power'], ['power', 'rio'], ['rio', 'radio'], ['power', 'motors'], ['rio', 'code'], ['rio', 'can']];
+// arrow-key neighbours
+const NEXT = {
+  battery: { ArrowRight: 'power', ArrowDown: 'motors' },
+  power: { ArrowLeft: 'battery', ArrowRight: 'rio', ArrowDown: 'motors' },
+  rio: { ArrowLeft: 'power', ArrowRight: 'radio', ArrowDown: 'code' },
+  radio: { ArrowLeft: 'rio', ArrowDown: 'can' },
+  motors: { ArrowUp: 'power', ArrowRight: 'code', ArrowLeft: 'battery' },
+  code: { ArrowUp: 'rio', ArrowLeft: 'motors', ArrowRight: 'can' },
+  can: { ArrowUp: 'radio', ArrowLeft: 'code' },
+};
+const nodeStatus = (k) => (k === 'motors' ? 'ok' : k === 'power' ? (st.brownouts ? 'bad' : 'ok') : statusOf(NODES[k].sys));
+const order = ['radio', 'rio', 'battery', 'code', 'can', 'power', 'motors'];
+let focus = order.find((k) => nodeStatus(k) === 'bad') || order.find((k) => nodeStatus(k) === 'warn') || 'battery';
+
+const map = document.getElementById('map');
+for (const [k, n] of Object.entries(NODES)) {
+  const el = document.createElement('div');
+  el.className = `node ${nodeStatus(k)}`;
+  el.id = 'n-' + k;
+  el.style.left = n.x + '%';
+  el.style.top = n.y + '%';
+  el.innerHTML = `<span class="corner"><span class="light ${nodeStatus(k)}"></span></span><div class="ico">${ICON[k]}</div><div class="lbl">${n.label}</div>${n.val ? `<div class="val num">${n.val}</div>` : ''}${n.extra || ''}`;
+  map.appendChild(el);
+}
+function drawWires() {
+  const r = map.getBoundingClientRect();
+  document.getElementById('wires').innerHTML = WIRES.map(([a, b]) => {
+    const A = NODES[a], B = NODES[b];
+    const hot = nodeStatus(a) === 'bad' && nodeStatus(b) === 'bad';
+    const x1 = (A.x / 100) * r.width, y1 = (A.y / 100) * r.height, x2 = (B.x / 100) * r.width, y2 = (B.y / 100) * r.height;
+    const mid = x1 === x2 ? '' : `L${x1},${(y1 + y2) / 2}L${x2},${(y1 + y2) / 2}`;
+    return `<path class="wire ${hot ? 'hot' : ''}" d="M${x1},${y1}${y1 === y2 ? '' : mid}L${x2},${y2}" />`;
+  }).join('');
+}
+
+/** What the detail panel draws for each part. */
+function chartFor(k, w, h) {
+  const red = cssVar('--bad'), warn = cssVar('--warn'), blue = cssVar('--accent'), muted = cssVar('--muted');
+  const phase = [{ start: S.auto.start, end: S.auto.end, color: 'rgba(216,161,0,.12)' }];
+  if (k === 'battery') return spark(S.series.v, { w, h, min: 5, max: 14, color: cssVar('--auto'), spans: phase, threshold: { v: 7, color: red }, marks: [{ t: st.vminT, color: red }] });
+  if (k === 'power' || k === 'motors') return spark(S.series.i, { w, h, min: 0, color: blue, fill: 'rgba(10,132,255,.15)', spans: phase });
+  if (k === 'radio') return spark(S.series.trip, { w, h, min: 0, color: muted, spans: phase.concat(S.noComms.map((s) => ({ ...s, color: red }))) });
+  if (k === 'code') return spark(S.series.cpu, { w, h, min: 0, max: 100, color: muted, spans: S.stalls.map((s) => ({ start: s.start, end: s.end + 0.3, color: warn })) });
+  if (k === 'rio') return spark(S.series.cpu, { w, h, min: 0, max: 100, color: muted, marks: railFaults && railFaults.t != null ? [{ t: railFaults.t, color: red }] : [] });
+  if (k === 'can') return spark(S.series.can, { w, h, min: 0, max: 100, color: muted, marks: S.events.filter((e) => e.tags.includes('can')).map((e) => ({ t: e.t, color: warn })) });
+  return '';
+}
+const BIG = {
+  battery: `${st.vmin}<small>V low</small>`, power: `${st.peakA}<small>A peak</small>`, motors: `${st.ah}<small>Ah used</small>`,
+  rio: railN ? `${railN}<small>rail faults</small>` : `${st.cpuAvg}<small>% CPU</small>`,
+  radio: `${st.enabledDrops}<small>drop</small>`, code: `${st.stallTime}<small>s frozen</small>`, can: `${canTotal}<small>messages</small>`,
+};
+
+function render() {
+  for (const k of Object.keys(NODES)) {
+    const el = document.getElementById('n-' + k);
+    el.classList.toggle('focus', k === focus);
+    el.classList.toggle('done', checked.has(k));
+  }
+  const n = NODES[focus], s = nodeStatus(focus);
+  const probs = focus === 'motors' ? [] : problemsOf(n.sys);
+  document.getElementById('detail').innerHTML = `
+    <div class="top"><span class="light big-light ${s}"></span><h2>${n.label}</h2></div>
+    <div class="big num ${s === 'bad' ? '' : ''}" style="color:${s === 'bad' ? 'var(--bad)' : s === 'warn' ? 'var(--warn)' : 'var(--text)'}">${BIG[focus]}</div>
+    <div class="chart">${chartFor(focus, 600, 120)}<div class="axis"><span>${clock(S.start)}</span><span>auto</span><span>teleop</span><span>${clock(S.end)}</span></div></div>
+    <div class="todo">${probs.length ? probs.map((p) => `<div><span class="light ${p.severity}"></span><span>${p.title}${p.fix ? `<small>${p.fix}</small>` : ''}</span></div>`).join('') : '<span class="okmsg">✓ Nothing wrong here</span>'}</div>`;
+}
+function openFull() {
+  const n = NODES[focus];
+  const el = document.getElementById('full');
+  el.innerHTML = `<h2><span class="light ${nodeStatus(focus)}"></span> ${n.label}</h2><div class="chart"><div class="sv">${chartFor(focus, 1600, 500)}</div><div class="axis" style="display:flex;justify-content:space-between;color:var(--faint);font-size:13px"><span>${clock(S.start)}</span><span>${clock(S.end)}</span></div></div>`;
+  el.classList.add('on');
+}
+window.addEventListener('keydown', (e) => {
+  const full = document.getElementById('full');
+  if (e.key === 'Escape') { full.classList.remove('on'); return; }
+  if (full.classList.contains('on')) return;
+  if (NEXT[focus][e.key]) { focus = NEXT[focus][e.key]; e.preventDefault(); }
+  else if (e.key === ' ') { toggleChecked(focus); e.preventDefault(); }
+  else if (e.key === 'Enter') { openFull(); return; }
+  else if (e.key.toLowerCase() === 'n') {
+    const bad = order.filter((k) => nodeStatus(k) !== 'ok' && !checked.has(k));
+    if (bad.length) focus = bad[(bad.indexOf(focus) + 1) % bad.length];
+  } else return;
+  render();
+});
+for (const k of Object.keys(NODES)) document.getElementById('n-' + k).addEventListener('click', () => { focus = k; render(); });
+window.addEventListener('resize', drawWires);
+drawWires();
+render();
+</script>
+</body>
+</html>
