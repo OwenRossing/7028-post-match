@@ -13,7 +13,7 @@ export function KeyBar({ keys, tabs = true, fixed = false }: { keys: [string, st
       <span className="keybar-tabs">
         {tabs && (
           <>
-            <kbd>1</kbd>–<kbd>5</kbd> tabs{' '}
+            <kbd>1</kbd>–<kbd>4</kbd> tabs{' '}
           </>
         )}
         <kbd>?</kbd> all keys

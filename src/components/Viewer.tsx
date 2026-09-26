@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { computeStats, findProblems, type ChartId } from '../lib/analysis';
+import { computeStats, findProblems, problemStops, stepProblem, type ChartId } from '../lib/analysis';
 import { ChartGroup, type Marker } from '../lib/chartGroup';
 import { download, eventsToCsv, logToCsv, safeFileName, summaryMarkdown } from '../lib/export';
 import type { LogEntry } from '../lib/library';
@@ -12,7 +12,6 @@ import type { ParsedState } from '../lib/useParsed';
 import { Icon } from './Icon';
 import { KeyBar } from './KeyBar';
 import { Scrim } from './Scrim';
-import { EventsView } from './viewer/EventsView';
 import { defaultChannels, Graphs } from './viewer/Graphs';
 import { Overview } from './viewer/Overview';
 import { RobotMap } from './viewer/RobotMap';
@@ -36,7 +35,6 @@ interface Props {
 const TABS: [Tab, string][] = [
   ['overview', 'Summary'],
   ['graphs', 'Graphs'],
-  ['events', 'Messages'],
   ['power', 'Power'],
   ['details', 'Details'],
 ];
@@ -93,6 +91,9 @@ function LoadedViewer({
   const [channels, setChannels] = useState<number[]>(() => defaultChannels(log));
   const [eventFilter, setEventFilter] = useState<EventFilter & { nonce: number }>({ nonce: 0 });
   const [menu, setMenu] = useState<'more' | null>(null);
+  useEffect(() => {
+    if (tab !== 'details') setEventFilter({ nonce: 0 });
+  }, [tab]);
 
   // Keep the sync group in step with the (possibly growing) log.
   useEffect(() => {
@@ -117,9 +118,10 @@ function LoadedViewer({
   useEffect(() => {
     const markers: Marker[] = [];
     for (const e of events?.events ?? []) {
-      if (e.kind === 'error') markers.push({ t: e.t, level: 'error' });
-      else if (e.kind === 'warning' && !e.tags.includes('tracer')) markers.push({ t: e.t, level: 'warning' });
-      else if (e.tags.includes('comms')) markers.push({ t: e.t, level: 'comms' });
+      const text = e.text.split('\n')[0].trim();
+      if (e.kind === 'error') markers.push({ t: e.t, level: 'error', text });
+      else if (e.kind === 'warning' && !e.tags.includes('tracer')) markers.push({ t: e.t, level: 'warning', text });
+      else if (e.tags.includes('comms')) markers.push({ t: e.t, level: 'comms', text });
     }
     group.setOverlay({
       modes: analysis.modes,
@@ -151,16 +153,15 @@ function LoadedViewer({
 
   const showEvents = useCallback(
     (filter: EventFilter) => {
-      setTab('events');
+      setTab('details');
       setEventFilter({ ...filter, nonce: Date.now() });
     },
     [setTab],
   );
 
-  const ctx: ViewCtx = { entry, parsed, group, theme, settings, tf, labels, labelKey, jumpTo, showEvents, setTab };
-
   const focusStats = useMemo(() => computeStats(log, events, analysis, analysis.focus), [log, events, analysis]);
   const focusProblems = useMemo(() => findProblems(log, events, analysis, focusStats), [log, events, analysis, focusStats]);
+  const ctx: ViewCtx = { entry, parsed, group, theme, settings, tf, labels, labelKey, problems: focusProblems, jumpTo, showEvents, setTab };
   const verdict = focusProblems.some((p) => p.severity === 'bad') ? 'bad' : focusProblems.some((p) => p.severity === 'warn') ? 'warn' : 'ok';
   const live = (entry.source === 'folder' || entry.source === 'companion') && Date.now() - (entry.dslog?.mtime ?? 0) < 20000;
 
@@ -169,7 +170,7 @@ function LoadedViewer({
     const onKey = (e: KeyboardEvent) => {
       if (isTyping(e) || e.ctrlKey || e.metaKey || e.altKey) return;
       const m = analysis.match;
-      const tabs: Tab[] = ['overview', 'graphs', 'events', 'power', 'details'];
+      const tabs: Tab[] = ['overview', 'graphs', 'power', 'details'];
       const pad = (a: number, b: number) => group.setRange(a - 2, b + 2);
       const onGraphs = tab === 'graphs';
       switch (e.key) {
@@ -177,7 +178,6 @@ function LoadedViewer({
         case '2':
         case '3':
         case '4':
-        case '5':
           setTab(tabs[Number(e.key) - 1]);
           break;
         // zoom keys only on Graphs, so letters stay free for the other screens
@@ -215,22 +215,17 @@ function LoadedViewer({
             e.preventDefault();
           }
           break;
+        // J goes back to the previous problem and K forward to the next one, like the arrows on the Graphs card
         case 'j':
         case 'k': {
-          const list = (events?.events ?? []).filter((ev) => ev.kind === 'error' || (ev.kind === 'warning' && !ev.tags.includes('tracer')));
-          if (!list.length) break;
-          const ref = group.pinned ?? (e.key === 'j' ? -Infinity : Infinity);
-          const next = e.key === 'j' ? list.find((ev) => ev.t > ref + 1e-3) : [...list].reverse().find((ev) => ev.t < ref - 1e-3);
-          if (next) {
-            if (tab !== 'graphs') setTab('graphs');
-            group.pin(next.t);
-          }
+          const stop = stepProblem(problemStops(focusProblems), group.pinned, e.key === 'k' ? 1 : -1);
+          if (stop) jumpTo(stop.t, { chart: stop.chart, width: 12 });
           break;
         }
         case '/':
-          if (tab === 'events') {
+          if (tab === 'details') {
             e.preventDefault();
-            document.getElementById('events-search')?.focus();
+            window.dispatchEvent(new Event('pitview:search-messages'));
           }
           break;
         case 'Escape':
@@ -241,7 +236,7 @@ function LoadedViewer({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [group, analysis, events, tab, setTab]);
+  }, [group, analysis, tab, setTab, focusProblems, jumpTo]);
 
   const baseName = safeFileName(`${analysis.title} ${entry.key}`);
   const exportActions = {
@@ -386,18 +381,17 @@ function LoadedViewer({
         </div>
       )}
       {tab === 'overview' && <RobotMap ctx={ctx} />}
-      {tab === 'details' && <Overview ctx={ctx} />}
+      {tab === 'details' && <Overview ctx={ctx} eventFilter={eventFilter} />}
       {tab === 'graphs' && <Graphs ctx={ctx} channels={channels} setChannels={setChannels} />}
       {tab === 'power' && <Power ctx={ctx} channels={channels} setChannels={setChannels} />}
-      {tab === 'events' && <EventsView ctx={ctx} initial={eventFilter} />}
       <KeyBar
         keys={
           tab === 'overview'
-            ? [['← → ↑ ↓', 'move'], ['Enter', 'graph'], ['Space', 'checked'], ['N', 'next problem'], ['M', 'messages']]
+            ? [['← → ↑ ↓', 'move'], ['Enter', 'graph'], ['Space', 'checked']]
             : tab === 'graphs'
-              ? [['← →', 'pan'], ['+ −', 'zoom'], ['A T M F', 'auto · teleop · match · all'], ['J K', 'next / prev issue'], ['Esc', 'back']]
-              : tab === 'events'
-                ? [['/', 'search'], ['J K', 'jump to issue on graph'], ['Esc', 'back']]
+              ? [['← →', 'pan'], ['+ −', 'zoom'], ['A T M F', 'auto · teleop · match · all'], ['J K', 'prev / next problem'], ['Esc', 'back']]
+              : tab === 'details'
+                ? [['/', 'search messages'], ['Esc', 'back']]
                 : [['Esc', 'back']]
         }
       />

@@ -40,12 +40,10 @@ export function Welcome({ library, recent, onOpenFiles, onOpen, onSample, onLate
         </>
       ) : (
         <>
-          <img className="welcome-icon" src="./favicon.svg" alt="" />
-          <h1>PitView</h1>
-          <p className="welcome-sub">See what went wrong in your last match.</p>
           <button className="btn pill primary big" onClick={onOpenFiles}>
-            Open log files
+            Open log files <kbd>O</kbd>
           </button>
+          <p className="welcome-hint">or drop .dslog files anywhere on this page</p>
         </>
       )}
 
@@ -73,7 +71,7 @@ export function Welcome({ library, recent, onOpenFiles, onOpen, onSample, onLate
           </button>
         )}
       </div>
-      <p className="welcome-hint">You can also drop .dslog files anywhere on this page.</p>
+      {latest && <p className="welcome-hint">You can also drop .dslog files anywhere on this page.</p>}
 
       {others.length > 0 && (
         <section className="welcome-recent">

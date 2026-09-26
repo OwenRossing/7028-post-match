@@ -75,6 +75,19 @@ export interface Problem {
 
 export type ChartId = 'voltage' | 'current' | 'comms' | 'cpu' | 'wifi' | 'channels';
 
+/** The problems that have a time to jump to, earliest first. */
+export function problemStops(problems: Problem[]): (Problem & { t: number })[] {
+  return problems
+    .filter((p): p is Problem & { t: number } => p.severity !== 'info' && p.t != null && Number.isFinite(p.t))
+    .sort((a, b) => a.t - b.t);
+}
+
+/** The problem after (dir 1) or before (dir -1) a time. With no time, the first or the last. */
+export function stepProblem(stops: (Problem & { t: number })[], from: number | null, dir: 1 | -1) {
+  if (dir === 1) return stops.find((p) => from == null || p.t > from + 0.05);
+  return [...stops].reverse().find((p) => from == null || p.t < from - 0.05);
+}
+
 export interface LoopCulprit {
   name: string;
   worst: number;
@@ -546,7 +559,7 @@ export function findProblems(
         severity: stats.codeStalls.longest >= 1 ? 'bad' : 'warn',
         title: `Robot code went unresponsive ${stats.codeStalls.count}× (longest ${fmtSpan(stats.codeStalls.longest)})`,
         detail: `The robot was connected but its code didn't report a mode for ${fmtSpan(stats.codeStalls.duration)} total${at(stats.codeStalls.longestT)} (longest gap).`,
-        fix: 'Look for slow loops or blocking calls (Messages → loop overruns), or a code restart.',
+        fix: 'Look for slow loops or blocking calls (Details → Slow loop steps), or a code restart.',
         t: stats.codeStalls.longestT,
         chart: 'cpu',
         tag: 'loop',
@@ -637,7 +650,7 @@ export function findProblems(
         severity: 'warn',
         title: `${errors.length} error message${errors.length === 1 ? '' : 's'} (${groups.size} unique)`,
         detail: `Most common (×${top.length}): ${top[0].text.split('\n')[0].slice(0, 160)}`,
-        fix: 'Open Messages to see where they come from.',
+        fix: 'Open Details → Messages to see where they come from.',
         t: errors[0].t,
         tag: 'error',
       });

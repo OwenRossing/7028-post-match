@@ -2530,38 +2530,6 @@ h3 {
   line-height: 1.15;
 }
 
-.details {
-  border-top: 0.5px solid var(--border-strong);
-  padding-top: 6px;
-}
-
-.details > summary {
-  list-style: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  cursor: pointer;
-  color: var(--accent);
-  font-size: 17px;
-  font-weight: 500;
-  padding: 8px 0;
-}
-
-.details > summary::-webkit-details-marker {
-  display: none;
-}
-
-.details[open] > summary svg {
-  transform: rotate(180deg);
-}
-
-.details-body {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-  padding-top: 10px;
-}
-
 /* ---------- Home ---------- */
 
 .welcome {
@@ -2569,13 +2537,6 @@ h3 {
   margin: 0 auto;
   padding: 14vh 24px 64px;
   text-align: center;
-}
-
-.welcome-icon {
-  width: 72px;
-  height: 72px;
-  border-radius: 18px;
-  margin-bottom: 18px;
 }
 
 .welcome-eyebrow {
@@ -2832,7 +2793,7 @@ h3 {
 
 /* ---------- Summary: robot map (prototypes/robot.html) ---------- */
 .rm-page { flex: 1; display: flex; max-width: none; padding: 20px 28px 24px; }
-.rm { flex: 1; display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(340px, 1fr); gap: 20px; min-height: 460px; }
+.rm { flex: 1; display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(340px, 1fr); gap: 20px; min-height: 520px; }
 
 /* parts sit at fixed spots on the map, sized to their content, joined by wires */
 .rm-map { position: relative; min-height: 420px; }
@@ -2896,8 +2857,11 @@ h3 {
 .rm-fix { display: flex; gap: 12px; align-items: flex-start; }
 .rm-fix .rm-light { margin-top: 5px; width: 13px; height: 13px; }
 .rm-fix b { display: block; font-size: 17px; }
-.rm-fix span { display: block; font-size: 15px; color: var(--muted); margin-top: 2px; }
 .rm-ok { display: flex; align-items: center; gap: 8px; color: var(--good); font-weight: 600; font-size: 20px; }
+/* side by side: the panel scrolls inside the row instead of stretching it, so the map never moves when focus changes */
+@media (min-width: 1001px) {
+  .rm-detail { contain: size; }
+}
 .rm-left { margin-top: auto; font-size: 13px; color: var(--faint); }
 
 @media (max-width: 1000px) {
@@ -2944,3 +2908,83 @@ h3 {
 @media (max-width: 860px) {
   .viewer-head { padding: 12px 16px 10px; }
 }
+
+/* ---------- Graphs: problems and the selected moment ---------- */
+.mo-chips { flex: 1; min-width: 0; max-height: 100%; overflow-y: auto; scrollbar-width: thin; display: flex; flex-wrap: wrap; align-content: center; gap: 8px; }
+.mo-chip {
+  display: inline-flex; align-items: center; gap: 8px; max-width: 210px; height: 32px; padding: 0 13px 0 11px;
+  border: 2px solid transparent; border-radius: 999px; background: var(--panel); color: var(--text);
+  font: inherit; font-size: 14px; cursor: pointer;
+}
+.mo-chip:hover { border-color: var(--accent); }
+.mo-chip-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mo-light { flex: none; width: 12px; height: 12px; border-radius: 50%; background: var(--good); }
+.mo-light.warn { background: var(--warn); border-radius: 3px; transform: rotate(45deg) scale(0.85); }
+.mo-light.bad { background: var(--bad); border-radius: 3px; }
+
+/* always the same height, so clicking a chart never shifts the charts */
+.moment {
+  position: sticky; top: 8px; z-index: 6; display: flex; align-items: center; gap: 22px;
+  height: 96px; padding: 12px 16px 12px 22px; border-radius: 22px; background: var(--panel);
+  box-shadow: 0 0 0 8px var(--bg), var(--shadow);
+}
+.moment.idle { background: var(--bg); box-shadow: 0 0 0 8px var(--bg), inset 0 0 0 2px var(--border-strong); }
+.mo-hint { flex: none; width: 210px; display: flex; align-items: center; gap: 14px; color: var(--muted); }
+.mo-hint b { display: block; font-size: 16px; font-weight: 600; color: var(--text); }
+.mo-hint span { font-size: 14px; }
+.mo-main { flex: 1.5; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.mo-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.mo-title { font-size: 17px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mo-time { margin-left: auto; flex: none; padding-left: 12px; font-size: 14px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mo-text {
+  margin: 0; font-size: 14.5px; line-height: 1.4; color: var(--muted);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.mo-side {
+  flex: 1; min-width: 0; align-self: stretch; display: flex; flex-direction: column; justify-content: center; gap: 2px;
+  padding-left: 22px; border-left: 1px solid var(--border);
+}
+.mo-msg { font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mo-msg b { margin-right: 4px; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
+.mo-more { font-size: 12px; color: var(--faint); }
+.mo-n { color: var(--faint); }
+.mo-actions { flex: none; display: flex; gap: 6px; }
+@media (max-width: 899px) {
+  .moment { gap: 12px; padding: 12px 12px 12px 16px; }
+  .mo-hint:not(:only-child), .mo-side { display: none; }
+  .mo-chips { flex-wrap: nowrap; overflow: auto hidden; }
+  .mo-chip { flex: none; }
+}
+
+/* hover card for the triangles */
+.marker-tip {
+  display: none; position: absolute; top: 26px; z-index: 12; max-width: 440px; padding: 8px 12px; border-radius: 12px;
+  background: var(--text); color: var(--bg); font-size: 12.5px; line-height: 1.45; pointer-events: none; box-shadow: var(--shadow-lg);
+}
+.marker-tip .mt-row { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.marker-tip .mt-row b { margin-right: 6px; font-variant-numeric: tabular-nums; }
+.marker-tip .mt-more { margin-top: 2px; opacity: 0.7; }
+
+/* ---------- Details: collapsed rows ---------- */
+.dsecs { background: var(--panel); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
+.dsec + .dsec { border-top: 0.5px solid var(--border-strong); }
+.dsec > summary {
+  list-style: none; display: flex; align-items: center; gap: 16px; padding: 17px 20px; cursor: pointer; user-select: none;
+}
+.dsec > summary::-webkit-details-marker { display: none; }
+.dsec > summary:hover { background: var(--panel-2); }
+.dsec-title { flex: none; font-size: 17px; font-weight: 600; }
+.dsec-sum { flex: 1; min-width: 0; text-align: right; font-size: 15px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dsec > summary svg { flex: none; color: var(--faint); transition: transform 0.15s; }
+.dsec[open] > summary svg { transform: rotate(180deg); }
+.dsec-body { display: flex; flex-direction: column; gap: 14px; padding: 2px 20px 22px; min-width: 0; }
+.dsec-note { margin: 0; font-size: 12.5px; }
+.dsec-actions { display: flex; justify-content: flex-end; }
+.dsec-nav { display: flex; flex-direction: column; gap: 8px; }
+.ev-view { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.dsec-body .fixlist { box-shadow: none; background: var(--panel-2); }
+.dsec-body .card { background: var(--panel-2); box-shadow: none; }
+
+/* ---------- Graphs: keep the top short so two charts fit ---------- */
+.graphs-page { gap: 12px; }
+.toolbar-legend { flex: 1; min-width: 0; display: flex; justify-content: flex-end; }

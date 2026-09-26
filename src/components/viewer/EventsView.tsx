@@ -143,15 +143,13 @@ export function EventsView({ ctx, initial }: { ctx: ViewCtx; initial: EventFilte
 
   if (!parsed.events)
     return (
-      <div className="page">
-        <div className="banner info">
-          <Icon name="info" /> No .dsevents file for this log. Drop the matching <code>{ctx.entry.key}.dsevents</code> to see messages.
-        </div>
+      <div className="banner info">
+        <Icon name="info" /> No .dsevents file for this log. Drop the matching <code>{ctx.entry.key}.dsevents</code> to see messages.
       </div>
     );
 
   return (
-    <div className="page">
+    <div className="ev-view">
       <div className="toolbar">
         <div className="seg" role="tablist" aria-label="Which messages">
           <button className={problemsOnly ? 'on' : ''} onClick={() => { setKinds(new Set(PROBLEM_KINDS)); setGrouped(true); }}>

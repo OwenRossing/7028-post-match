@@ -5,6 +5,8 @@ import type { ModeSegment, Span } from './analysis';
 export interface Marker {
   t: number;
   level: 'error' | 'warning' | 'comms';
+  /** First line of the message, for tooltips. */
+  text?: string;
 }
 
 export interface Overlay {
@@ -14,6 +16,21 @@ export interface Overlay {
   brownouts: Span[];
   markers: Marker[];
   showMarkers: boolean;
+}
+
+/** Folds items with the same key into the first one, with how many there were. Keeps order. */
+export function collapseRepeats<T>(items: T[], key: (x: T) => string): [T, number][] {
+  const out: [T, number][] = [];
+  const at = new Map<string, number>();
+  for (const it of items) {
+    const k = key(it);
+    const i = at.get(k);
+    if (i == null) {
+      at.set(k, out.length);
+      out.push([it, 1]);
+    } else out[i][1]++;
+  }
+  return out;
 }
 
 type Channel = 'range' | 'hover' | 'pin';

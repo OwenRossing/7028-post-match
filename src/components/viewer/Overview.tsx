@@ -1,13 +1,15 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { computeStats, findProblems, type Problem, type Span } from '../../lib/analysis';
 import { fmtSpan } from '../../lib/time';
 import { Icon, type IconName } from '../Icon';
 import { Navigator, TimelineLegend } from '../Navigator';
-import { useGroupValue, type ViewCtx } from './types';
+import { EventsView } from './EventsView';
+import { useGroupValue, type EventFilter, type ViewCtx } from './types';
 
 type Scope = 'focus' | 'all' | 'zoom';
 
 const fix = (v: number, d = 1) => (Number.isFinite(v) ? v.toFixed(d) : '–');
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 /** Findings the pit crew has ticked off, remembered per log on this computer. */
 export function useChecked(logKey: string) {
@@ -37,7 +39,8 @@ export function useChecked(logKey: string) {
   return [checked, toggle] as const;
 }
 
-export function Overview({ ctx }: { ctx: ViewCtx }) {
+/** Details: the verdict and fix list, then everything else as collapsed rows that each say what is inside. */
+export function Overview({ ctx, eventFilter }: { ctx: ViewCtx; eventFilter: EventFilter & { nonce: number } }) {
   const { parsed, group, theme, tf } = ctx;
   const { log, events, analysis } = parsed;
   const range = useGroupValue(group, 'range', () => group.range);
@@ -65,10 +68,42 @@ export function Overview({ ctx }: { ctx: ViewCtx }) {
   const [expanded, setExpanded] = useState<string | null | undefined>(undefined);
   const openId = expanded === undefined ? firstOpen : expanded;
 
+  // "Related messages", the errors tile and "/" all land on the Messages row
+  const [msgOpen, setMsgOpen] = useState(false);
+  useEffect(() => {
+    if (!eventFilter.nonce) return;
+    setMsgOpen(true);
+    const t = setTimeout(() => document.getElementById('dsec-messages')?.scrollIntoView({ block: 'start', behavior: 'smooth' }), 60);
+    return () => clearTimeout(t);
+  }, [eventFilter.nonce]);
+  useEffect(() => {
+    const search = () => {
+      setMsgOpen(true);
+      setTimeout(() => {
+        const el = document.getElementById('events-search');
+        el?.scrollIntoView({ block: 'center' });
+        el?.focus();
+      }, 60);
+    };
+    window.addEventListener('pitview:search-messages', search);
+    return () => window.removeEventListener('pitview:search-messages', search);
+  }, []);
+
   const focusLabel = analysis.match ? analysis.match.label : analysis.runs.length ? 'Enabled time' : 'Connected time';
 
+  const numbersSummary = [
+    `Trip ${fix(stats.trip.avg)} ms`,
+    `CPU ${fix(stats.cpu.avg, 0)}%`,
+    `CAN ${fix(stats.can.max, 0)}% max`,
+    stats.current.available ? `${fix(stats.current.peak, 0)} A peak` : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  const robotSummary =
+    [meta?.robotLanguage && `${meta.robotLanguage} ${meta.wpilibVersion ?? ''}`.trim(), meta?.dsVersion && `DS ${meta.dsVersion}`].filter(Boolean).join(' · ') ||
+    (meta?.team ? `Team ${meta.team}` : 'No .dsevents file');
+
   // One sentence that answers "is the robot OK?"
-  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
   let tone: 'bad' | 'warn' | 'ok';
   let headline: string;
   let sub: string;
@@ -134,11 +169,28 @@ export function Overview({ ctx }: { ctx: ViewCtx }) {
 
       {log && <Kpis ctx={ctx} stats={stats} part="vitals" />}
 
-      <details className="details">
-        <summary>
-          Details <Icon name="chevronDown" size={16} />
-        </summary>
-        <div className="details-body">
+      <div className="dsecs">
+        <Section
+          id="dsec-messages"
+          title="Messages"
+          summary={events ? `${plural(stats.events.error, 'error')} · ${plural(stats.events.warning, 'warning')}` : 'No .dsevents file'}
+          open={msgOpen}
+          onToggle={setMsgOpen}
+        >
+          <EventsView ctx={ctx} initial={eventFilter} />
+        </Section>
+
+        {notes.length > 0 && (
+          <Section title="Notes" summary={notes.map((p) => p.title).join(' · ')}>
+            <ul className="fixlist">
+              {notes.map((p) => (
+                <FixRow key={p.id} {...rowProps(p)} />
+              ))}
+            </ul>
+          </Section>
+        )}
+
+        <Section title="Numbers" summary={numbersSummary}>
           <div className="toolbar">
             <span className="label">Looking at</span>
             <div className="seg" role="tablist">
@@ -158,255 +210,233 @@ export function Overview({ ctx }: { ctx: ViewCtx }) {
               {tf.fmt(span.start)} → {tf.fmt(span.end)} ({fmtSpan(span.end - span.start)})
             </span>
           </div>
-
           {log && (
-            <div className="card">
-              <div className="card-body" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <Navigator group={group} analysis={analysis} log={log} theme={theme} interactive={false} onJump={(t) => ctx.jumpTo(t)} height={70} />
-                <TimelineLegend theme={theme} />
-              </div>
+            <div className="dsec-nav">
+              <Navigator group={group} analysis={analysis} log={log} theme={theme} interactive={false} onJump={(t) => ctx.jumpTo(t)} height={70} />
+              <TimelineLegend theme={theme} />
             </div>
           )}
-
           {log && <Kpis ctx={ctx} stats={stats} part="more" />}
+        </Section>
 
-          {notes.length > 0 && (
-            <section className="fixsec">
-              <h3 className="fixsec-title">Notes</h3>
-              <ul className="fixlist">
-                {notes.map((p) => (
-                  <FixRow key={p.id} {...rowProps(p)} />
+        {analysis.loopCulprits.length > 0 && (
+          <Section
+            title="Slow loop steps"
+            summary={`${analysis.loopCulprits[0].name} · up to ${(analysis.loopCulprits[0].worst * 1000).toFixed(0)} ms`}
+          >
+            <p className="muted dsec-note">
+              From WPILib's loop timing printouts. The worst step each time the loop overran; framework entries (like robotPeriodic) include everything they call.
+            </p>
+            <table className="data">
+              <thead>
+                <tr>
+                  <th>Step</th>
+                  <th className="r">Times worst</th>
+                  <th className="r">Worst time</th>
+                </tr>
+              </thead>
+              <tbody>
+                {analysis.loopCulprits.slice(0, 8).map((c) => (
+                  <tr key={c.name}>
+                    <td className="mono" style={{ fontSize: 12.5 }}>
+                      {c.name} {c.framework && <span className="badge">framework</span>}
+                    </td>
+                    <td className="r">{c.count}</td>
+                    <td className="r" style={{ color: c.worst > 0.02 ? 'var(--warn)' : undefined }}>
+                      {(c.worst * 1000).toFixed(1)} ms
+                    </td>
+                  </tr>
                 ))}
-              </ul>
-            </section>
-          )}
+              </tbody>
+            </table>
+            <div className="dsec-actions">
+              <button className="btn small ghost" onClick={() => ctx.showEvents({ tag: 'tracer' })}>
+                View timings
+              </button>
+            </div>
+          </Section>
+        )}
 
-      <div className="grid-2">
-        <div className="stack">
-          {analysis.loopCulprits.length > 0 && (
-            <div className="card">
-              <div className="card-head">
-                <h3>Slowest steps in overrun loops</h3>
-                <span className="grow" />
-                <button className="btn small ghost" onClick={() => ctx.showEvents({ tag: 'tracer' })}>
-                  View timings
-                </button>
-              </div>
-              <div className="card-body">
-                <p className="muted" style={{ margin: '0 0 8px', fontSize: 12.5 }}>
-                  From WPILib's loop timing printouts. The worst step each time the loop overran; framework entries (like robotPeriodic) include everything they call.
-                </p>
-                <table className="data">
-                  <thead>
-                    <tr>
-                      <th>Step</th>
-                      <th className="r">Times worst</th>
-                      <th className="r">Worst time</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {analysis.loopCulprits.slice(0, 8).map((c) => (
-                      <tr key={c.name}>
-                        <td className="mono" style={{ fontSize: 12.5 }}>
-                          {c.name} {c.framework && <span className="badge">framework</span>}
-                        </td>
-                        <td className="r">{c.count}</td>
-                        <td className="r" style={{ color: c.worst > 0.02 ? 'var(--warn)' : undefined }}>
-                          {(c.worst * 1000).toFixed(1)} ms
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+        {analysis.canDevices.length > 0 && (
+          <Section
+            title="CAN devices"
+            summary={`${plural(analysis.canDevices.length, 'device')} reporting problems · ${plural(
+              analysis.canDevices.reduce((a, d) => a + d.count, 0),
+              'message',
+            )}`}
+          >
+            <table className="data">
+              <thead>
+                <tr>
+                  <th>Device</th>
+                  <th className="r">Messages</th>
+                  <th className="r">Errors</th>
+                  <th className="r">First seen</th>
+                </tr>
+              </thead>
+              <tbody>
+                {analysis.canDevices.map((d) => (
+                  <tr key={d.device} className="clickable" onClick={() => ctx.jumpTo(d.firstT)}>
+                    <td>{d.device}</td>
+                    <td className="r">{d.count}</td>
+                    <td className="r">{d.errors}</td>
+                    <td className="r muted">{tf.fmt(d.firstT)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="dsec-actions">
+              <button className="btn small ghost" onClick={() => ctx.showEvents({ tag: 'can' })}>
+                View messages
+              </button>
             </div>
-          )}
+          </Section>
+        )}
 
-          {analysis.canDevices.length > 0 && (
-            <div className="card">
-              <div className="card-head">
-                <h3>CAN devices reporting problems</h3>
-                <span className="grow" />
-                <button className="btn small ghost" onClick={() => ctx.showEvents({ tag: 'can' })}>
-                  View messages
-                </button>
-              </div>
-              <div className="card-body">
-                <table className="data">
-                  <thead>
-                    <tr>
-                      <th>Device</th>
-                      <th className="r">Messages</th>
-                      <th className="r">Errors</th>
-                      <th className="r">First seen</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {analysis.canDevices.map((d) => (
-                      <tr key={d.device} className="clickable" onClick={() => ctx.jumpTo(d.firstT)}>
-                        <td>{d.device}</td>
-                        <td className="r">{d.count}</td>
-                        <td className="r">{d.errors}</td>
-                        <td className="r muted">{tf.fmt(d.firstT)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-        </div>
+        {analysis.runs.length > 0 && (
+          <Section title="Enabled periods" summary={analysis.runs.length === 1 ? analysis.runs[0].label : plural(analysis.runs.length, 'period')}>
+            <table className="data">
+              <tbody>
+                {analysis.runs.map((r, i) => (
+                  <tr key={i} className="clickable" onClick={() => ctx.jumpTo((r.start + r.end) / 2, { width: r.end - r.start + 6 })}>
+                    <td>
+                      <b>{r.label}</b>
+                      <div className="faint" style={{ fontSize: 12 }}>
+                        {r.autoTime > 0 && `Auto ${fmtSpan(r.autoTime)}`}
+                        {r.autoTime > 0 && r.teleopTime > 0 && ' · '}
+                        {r.teleopTime > 0 && `Teleop ${fmtSpan(r.teleopTime)}`}
+                        {r.testTime > 0 && ` · Test ${fmtSpan(r.testTime)}`}
+                      </div>
+                    </td>
+                    <td className="r muted">{tf.fmt(r.start)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Section>
+        )}
 
-        <div className="stack">
-          {analysis.runs.length > 0 && (
-            <div className="card">
-              <div className="card-head">
-                <h3>Enabled periods</h3>
-              </div>
-              <div className="card-body">
-                <table className="data">
-                  <tbody>
-                    {analysis.runs.map((r, i) => (
-                      <tr key={i} className="clickable" onClick={() => ctx.jumpTo((r.start + r.end) / 2, { width: r.end - r.start + 6 })}>
-                        <td>
-                          <b>{r.label}</b>
-                          <div className="faint" style={{ fontSize: 12 }}>
-                            {r.autoTime > 0 && `Auto ${fmtSpan(r.autoTime)}`}
-                            {r.autoTime > 0 && r.teleopTime > 0 && ' · '}
-                            {r.teleopTime > 0 && `Teleop ${fmtSpan(r.teleopTime)}`}
-                            {r.testTime > 0 && ` · Test ${fmtSpan(r.testTime)}`}
-                          </div>
-                        </td>
-                        <td className="r muted">{tf.fmt(r.start)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
+        <Section title="Robot & driver station" summary={robotSummary}>
+          <dl className="kv">
+            {meta?.team && (
+              <>
+                <dt>Team</dt>
+                <dd>{meta.team}</dd>
+              </>
+            )}
+            {meta?.eventName && (
+              <>
+                <dt>Event</dt>
+                <dd>{meta.eventName}</dd>
+              </>
+            )}
+            {meta?.fms && meta.fms.matchType !== 'None' && (
+              <>
+                <dt>FMS match</dt>
+                <dd>
+                  {meta.fms.matchType} {meta.fms.matchNumber}
+                  {meta.fms.replay > 1 ? ` (replay ${meta.fms.replay})` : ''}
+                </dd>
+              </>
+            )}
+            {meta?.dsVersion && (
+              <>
+                <dt>Driver Station</dt>
+                <dd>{meta.dsVersion}</dd>
+              </>
+            )}
+            {meta?.robotLanguage && (
+              <>
+                <dt>Robot code</dt>
+                <dd>
+                  {meta.robotLanguage} {meta.wpilibVersion}
+                </dd>
+              </>
+            )}
+            {meta?.rioImage && (
+              <>
+                <dt>roboRIO image</dt>
+                <dd className="mono" style={{ fontSize: 12 }}>
+                  {meta.rioImage}
+                </dd>
+              </>
+            )}
+            {log && (
+              <>
+                <dt>Power distribution</dt>
+                <dd>
+                  {log.pdType === 'rev' ? 'REV PDH' : log.pdType === 'ctre' ? 'CTRE PDP' : 'Not logged'}
+                  {log.pdCanId != null && log.pdType !== 'none' ? ` (CAN ${log.pdCanId})` : ''}
+                </dd>
+              </>
+            )}
+            {meta && meta.rioStats.length > 0 && (
+              <>
+                <dt>roboRIO free memory</dt>
+                <dd>{Math.min(...meta.rioStats.map((s) => s.value.memMB).filter((m) => m > 0), Infinity).toString().replace('Infinity', '–')} MB (min)</dd>
+                <dt>DS laptop battery</dt>
+                <dd>{meta.rioStats[meta.rioStats.length - 1].value.laptopBatt}%</dd>
+              </>
+            )}
+            {meta && meta.gameData.some((g) => g.value) && (
+              <>
+                <dt>Game data</dt>
+                <dd>{meta.gameData.filter((g) => g.value).map((g) => `"${g.value}"`).join(', ')}</dd>
+              </>
+            )}
+          </dl>
+          {!meta && <p className="muted">Add the .dsevents file for team, match and version details.</p>}
+        </Section>
 
-          <div className="card">
-            <div className="card-head">
-              <h3>Robot & driver station</h3>
-            </div>
-            <div className="card-body">
-              <dl className="kv">
-                {meta?.team && (
-                  <>
-                    <dt>Team</dt>
-                    <dd>{meta.team}</dd>
-                  </>
-                )}
-                {meta?.eventName && (
-                  <>
-                    <dt>Event</dt>
-                    <dd>{meta.eventName}</dd>
-                  </>
-                )}
-                {meta?.fms && meta.fms.matchType !== 'None' && (
-                  <>
-                    <dt>FMS match</dt>
-                    <dd>
-                      {meta.fms.matchType} {meta.fms.matchNumber}
-                      {meta.fms.replay > 1 ? ` (replay ${meta.fms.replay})` : ''}
-                    </dd>
-                  </>
-                )}
-                {meta?.dsVersion && (
-                  <>
-                    <dt>Driver Station</dt>
-                    <dd>{meta.dsVersion}</dd>
-                  </>
-                )}
-                {meta?.robotLanguage && (
-                  <>
-                    <dt>Robot code</dt>
-                    <dd>
-                      {meta.robotLanguage} {meta.wpilibVersion}
-                    </dd>
-                  </>
-                )}
-                {meta?.rioImage && (
-                  <>
-                    <dt>roboRIO image</dt>
-                    <dd className="mono" style={{ fontSize: 12 }}>
-                      {meta.rioImage}
-                    </dd>
-                  </>
-                )}
-                {log && (
-                  <>
-                    <dt>Power distribution</dt>
-                    <dd>
-                      {log.pdType === 'rev' ? 'REV PDH' : log.pdType === 'ctre' ? 'CTRE PDP' : 'Not logged'}
-                      {log.pdCanId != null && log.pdType !== 'none' ? ` (CAN ${log.pdCanId})` : ''}
-                    </dd>
-                  </>
-                )}
-                {meta && meta.rioStats.length > 0 && (
-                  <>
-                    <dt>roboRIO free memory</dt>
-                    <dd>{Math.min(...meta.rioStats.map((s) => s.value.memMB).filter((m) => m > 0), Infinity).toString().replace('Infinity', '–')} MB (min)</dd>
-                    <dt>DS laptop battery</dt>
-                    <dd>{meta.rioStats[meta.rioStats.length - 1].value.laptopBatt}%</dd>
-                  </>
-                )}
-                {meta && meta.gameData.some((g) => g.value) && (
-                  <>
-                    <dt>Game data</dt>
-                    <dd>{meta.gameData.filter((g) => g.value).map((g) => `"${g.value}"`).join(', ')}</dd>
-                  </>
-                )}
-              </dl>
-              {!meta && <p className="muted">Add the .dsevents file for team, match and version details.</p>}
-            </div>
-          </div>
-
-          {meta && meta.joysticks.length > 0 && (
-            <div className="card">
-              <div className="card-head">
-                <h3>Controllers</h3>
-              </div>
-              <div className="card-body">
-                <table className="data">
-                  <tbody>
-                    {meta.joysticks.map((j) => (
-                      <tr key={j.slot}>
-                        <td className="faint" style={{ width: 28 }}>
-                          {j.slot}
-                        </td>
-                        <td>{j.name}</td>
-                        <td className="r faint" style={{ fontSize: 12 }}>
-                          {j.axes}a · {j.buttons}b · {j.povs}p
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {log && stats.channels.length > 0 && (
-            <div className="card">
-              <div className="card-head">
-                <h3>Top current draws</h3>
-                <span className="grow" />
-                <button className="btn small ghost" onClick={() => ctx.setTab('power')}>
-                  Power tab
-                </button>
-              </div>
-              <div className="card-body">
-                <TopChannels ctx={ctx} stats={stats} />
-              </div>
-            </div>
-          )}
-        </div>
+        {meta && meta.joysticks.length > 0 && (
+          <Section title="Controllers" summary={plural(meta.joysticks.length, 'controller')}>
+            <table className="data">
+              <tbody>
+                {meta.joysticks.map((j) => (
+                  <tr key={j.slot}>
+                    <td className="faint" style={{ width: 28 }}>
+                      {j.slot}
+                    </td>
+                    <td>{j.name}</td>
+                    <td className="r faint" style={{ fontSize: 12 }}>
+                      {j.axes}a · {j.buttons}b · {j.povs}p
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Section>
+        )}
       </div>
-        </div>
-      </details>
     </div>
+  );
+}
+
+/** One collapsed row: a title, a one-line summary of what is inside, and a chevron. */
+function Section({
+  id,
+  title,
+  summary,
+  open,
+  onToggle,
+  children,
+}: {
+  id?: string;
+  title: string;
+  summary: string;
+  open?: boolean;
+  onToggle?: (open: boolean) => void;
+  children: ReactNode;
+}) {
+  return (
+    <details className="dsec" id={id} open={open} onToggle={onToggle ? (e) => onToggle(e.currentTarget.open) : undefined}>
+      <summary>
+        <span className="dsec-title">{title}</span>
+        <span className="dsec-sum">{summary}</span>
+        <Icon name="chevronDown" size={18} />
+      </summary>
+      <div className="dsec-body">{children}</div>
+    </details>
   );
 }
 
@@ -595,40 +625,5 @@ function Kpis({ ctx, stats, part }: { ctx: ViewCtx; stats: ReturnType<typeof com
         </button>
       ))}
     </div>
-  );
-}
-
-function TopChannels({ ctx, stats }: { ctx: ViewCtx; stats: ReturnType<typeof computeStats> }) {
-  const top = [...stats.channels].filter((c) => c.peak > 0.5).sort((a, b) => b.ah - a.ah).slice(0, 6);
-  const maxAh = Math.max(...top.map((c) => c.ah), 0.0001);
-  if (!top.length) return <p className="muted">No significant current draw.</p>;
-  return (
-    <table className="data">
-      <thead>
-        <tr>
-          <th>Channel</th>
-          <th>Charge used</th>
-          <th className="r">Peak</th>
-        </tr>
-      </thead>
-      <tbody>
-        {top.map((c) => (
-          <tr key={c.ch} className="clickable" onClick={() => ctx.jumpTo(c.peakT, { chart: 'channels' })}>
-            <td>{ctx.labels?.[c.ch]?.trim() || `Ch ${c.ch}`}</td>
-            <td style={{ width: '40%' }}>
-              <div className="row" style={{ flexWrap: 'nowrap' }}>
-                <div className="bar" style={{ flex: 1 }}>
-                  <div style={{ width: `${(c.ah / maxAh) * 100}%`, background: 'var(--c-current)' }} />
-                </div>
-                <span className="num faint" style={{ fontSize: 12, width: 58, textAlign: 'right' }}>
-                  {(c.ah * 1000).toFixed(0)} mAh
-                </span>
-              </div>
-            </td>
-            <td className="r">{c.peak.toFixed(0)} A</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
   );
 }

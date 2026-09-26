@@ -22,7 +22,6 @@ const FINDINGS: Record<Part, string[]> = {
 };
 const LABEL: Record<Part, string> = { battery: 'Battery', power: 'Power', rio: 'roboRIO', radio: 'Radio', motors: 'Motors', code: 'Code', can: 'CAN' };
 const CHART: Record<Part, ChartId> = { battery: 'voltage', power: 'current', rio: 'cpu', radio: 'comms', motors: 'channels', code: 'cpu', can: 'cpu' };
-const TAG: Partial<Record<Part, string>> = { radio: 'comms', code: 'loop', can: 'can', rio: 'rail' };
 // grid position (column, row) for arrow keys; XY places each column/row on the map, in percent (as in the prototype)
 const POS: Record<Part, [number, number]> = { battery: [1, 1], power: [2, 1], rio: [3, 1], radio: [4, 1], motors: [2, 2], code: [3, 2], can: [4, 2] };
 const COL_X = [12, 37, 63, 88];
@@ -100,10 +99,6 @@ export function RobotMap({ ctx }: { ctx: ViewCtx }) {
       if (n) { setFocus(n); e.preventDefault(); }
       else if (e.key === ' ') { toggle(focus); e.preventDefault(); }
       else if (e.key === 'Enter') { open(focus); e.preventDefault(); }
-      else if (e.key === 'n') {
-        const todo = ORDER.filter((p) => status(p) !== 'ok' && !checked.has(p));
-        if (todo.length) setFocus(todo[(todo.indexOf(focus) + 1) % todo.length]);
-      } else if (e.key === 'm' && TAG[focus] && events) ctx.showEvents({ tag: TAG[focus] });
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -249,10 +244,7 @@ export function RobotMap({ ctx }: { ctx: ViewCtx }) {
               byPart[f].map((p) => (
                 <div key={p.id} className="rm-fix">
                   <span className={`rm-light ${p.severity as Severity}`} />
-                  <div>
-                    <b>{p.title}</b>
-                    {p.fix && <span>{p.fix}</span>}
-                  </div>
+                  <b>{p.title}</b>
                 </div>
               ))
             ) : (

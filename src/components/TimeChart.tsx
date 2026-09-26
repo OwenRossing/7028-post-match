@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import uPlot from 'uplot';
 import 'uplot/dist/uPlot.min.css';
-import type { ChartGroup } from '../lib/chartGroup';
+import { collapseRepeats, type ChartGroup, type Marker } from '../lib/chartGroup';
 import { alpha, type ChartTheme } from '../lib/theme';
 
 export interface SeriesSpec {
@@ -43,6 +43,10 @@ interface Props {
   bands?: boolean;
   onPin?: (t: number) => void;
 }
+
+/** The triangles sit in the top strip of each plot; this is how far down, and how far sideways, still counts as "on" one. */
+const MARKER_ZONE = 24;
+const MARKER_HIT = 6;
 
 const TIME_INCRS = [0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200];
 
@@ -280,14 +284,60 @@ export function TimeChart({ group, x, series, axes, thresholds = [], height = 18
         group.zoomAround(t, Math.exp(e.deltaY * 0.004));
       }
     };
+    /** Markers under the pointer (nearest first) when it is in the triangle strip. */
+    const markersAt = (cx: number, cy: number): Marker[] => {
+      if (!group.overlay.showMarkers || cy > MARKER_ZONE) return [];
+      const hits: { m: Marker; d: number }[] = [];
+      for (const m of group.overlay.markers) {
+        const d = Math.abs(u.valToPos(m.t, 'x') - cx);
+        if (d <= MARKER_HIT) hits.push({ m, d });
+      }
+      return hits.sort((a, b) => a.d - b.d).map((h) => h.m);
+    };
+
+    const tip = document.createElement('div');
+    tip.className = 'marker-tip';
+    u.over.appendChild(tip);
+    const onMove = (e: MouseEvent) => {
+      const rect = u.over.getBoundingClientRect();
+      const cx = e.clientX - rect.left;
+      const hits = markersAt(cx, e.clientY - rect.top);
+      u.over.style.cursor = hits.length ? 'pointer' : '';
+      if (!hits.length) {
+        tip.style.display = 'none';
+        return;
+      }
+      const uniq = collapseRepeats(hits, (m) => m.text ?? m.level);
+      tip.replaceChildren(
+        ...uniq.slice(0, 3).map(([m, n]) => {
+          const row = document.createElement('div');
+          row.className = `mt-row ${m.level}`;
+          const time = document.createElement('b');
+          time.textContent = group.fmt(m.t);
+          row.append(time, ` ${m.text ?? (m.level === 'comms' ? 'Comms message' : 'Message')}${n > 1 ? `  ×${n}` : ''}`);
+          return row;
+        }),
+        ...(uniq.length > 3 ? [Object.assign(document.createElement('div'), { className: 'mt-more', textContent: `+${uniq.length - 3} more here` })] : []),
+      );
+      tip.style.display = 'block';
+      const w = tip.offsetWidth;
+      tip.style.left = `${cx + 14 + w > rect.width ? Math.max(0, cx - 14 - w) : cx + 14}px`;
+    };
+    const onLeave = () => {
+      tip.style.display = 'none';
+    };
     const onClick = (e: MouseEvent) => {
       if (Math.abs(e.clientX - downX) > 3) return;
       const rect = u.over.getBoundingClientRect();
-      const t = u.posToVal(e.clientX - rect.left, 'x');
+      const cx = e.clientX - rect.left;
+      // clicking a triangle pins that message's exact time
+      const t = markersAt(cx, e.clientY - rect.top)[0]?.t ?? u.posToVal(cx, 'x');
       if (onPinRef.current) onPinRef.current(t);
       else group.pin(t, false);
     };
     u.over.addEventListener('wheel', onWheel, { passive: false });
+    u.over.addEventListener('mousemove', onMove);
+    u.over.addEventListener('mouseleave', onLeave);
     u.over.addEventListener('click', onClick);
 
     const ro = new ResizeObserver(() => {
@@ -299,6 +349,8 @@ export function TimeChart({ group, x, series, axes, thresholds = [], height = 18
     return () => {
       ro.disconnect();
       u.over.removeEventListener('wheel', onWheel);
+      u.over.removeEventListener('mousemove', onMove);
+      u.over.removeEventListener('mouseleave', onLeave);
       u.over.removeEventListener('click', onClick);
       group.remove(u);
       u.destroy();

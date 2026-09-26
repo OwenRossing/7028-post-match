@@ -9,6 +9,7 @@ import { channelColor } from '../../lib/theme';
 import { Icon } from '../Icon';
 import { Navigator, TimelineLegend } from '../Navigator';
 import { TimeChart, type AxisSpec, type SeriesSpec, type Threshold } from '../TimeChart';
+import { Moment } from './Moment';
 import { useGroupValue, type ViewCtx } from './types';
 
 export function toNullable(a: Float32Array): (number | null)[] {
@@ -202,13 +203,13 @@ export function Graphs({
     return (
       <div className="page">
         <div className="banner info">
-          <Icon name="info" /> No .dslog file for this log, so there is nothing to graph. The Events tab still works.
+          <Icon name="info" /> No .dslog file for this log, so there is nothing to graph. The messages under Details still work.
         </div>
       </div>
     );
 
   return (
-    <div className="page">
+    <div className="page graphs-page">
       <div className="toolbar">
         <div className="seg" aria-label="Zoom to">
           {match && <button onClick={() => zoomTo(match.start, match.end)} title="Whole match (M)">Match</button>}
@@ -229,7 +230,9 @@ export function Graphs({
         <button className="btn icon round" onClick={() => group.zoom(1 / 0.6)} title="Zoom out (−)" aria-label="Zoom out">
           <Icon name="zoomOut" size={16} />
         </button>
-        <span style={{ flex: 1 }} />
+        <div className="toolbar-legend">
+          <TimelineLegend theme={theme} />
+        </div>
         {parsed.events && (
           <button
             className={`btn icon round ${settings.eventsPanelOpen ? 'active' : ''}`}
@@ -302,11 +305,12 @@ export function Graphs({
       </div>
 
       <div className="card">
-        <div className="card-body" style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 10, paddingBottom: 10 }}>
-          <Navigator group={group} analysis={analysis} log={log} theme={theme} />
-          <TimelineLegend theme={theme} />
+        <div className="card-body" style={{ paddingTop: 8, paddingBottom: 8 }}>
+          <Navigator group={group} analysis={analysis} log={log} theme={theme} height={52} />
         </div>
       </div>
+
+      <Moment ctx={ctx} />
 
       <div className={`graphs ${settings.eventsPanelOpen && parsed.events ? '' : 'no-panel'}`}>
         <div className="stack" style={{ gap: 12 }}>
