@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { computeStats, findProblems, problemStops, stepProblem, type ChartId } from '../lib/analysis';
+import { computeStats, findProblems, problemStops, stepProblem } from '../lib/analysis';
 import { ChartGroup, type Marker } from '../lib/chartGroup';
 import { download, eventsToCsv, logToCsv, safeFileName, summaryMarkdown } from '../lib/export';
 import type { LogEntry } from '../lib/library';
@@ -12,15 +12,17 @@ import type { ParsedState } from '../lib/useParsed';
 import { Icon } from './Icon';
 import { KeyBar } from './KeyBar';
 import { Scrim } from './Scrim';
-import { defaultChannels, Graphs } from './viewer/Graphs';
-import { Overview } from './viewer/Overview';
-import { RobotMap } from './viewer/RobotMap';
-import { Power } from './viewer/Power';
-import type { EventFilter, Tab, ViewCtx } from './viewer/types';
+import { Board } from './viewer/Board';
+import { EventsView } from './viewer/EventsView';
+import { CHART_SIGNALS, Graphs } from './viewer/Graphs';
+import { Info } from './viewer/Info';
+import type { EventFilter, JumpOpts, Tab, ViewCtx } from './viewer/types';
 
 interface Props {
   entry: LogEntry;
   state: ParsedState;
+  /** The whole library, for comparing this match against earlier ones. */
+  entries: LogEntry[];
   theme: ChartTheme;
   settings: Settings;
   tab: Tab;
@@ -33,10 +35,10 @@ interface Props {
 }
 
 const TABS: [Tab, string][] = [
-  ['overview', 'Summary'],
+  ['board', 'Board'],
   ['graphs', 'Graphs'],
-  ['power', 'Power'],
-  ['details', 'Details'],
+  ['messages', 'Messages'],
+  ['info', 'Info'],
 ];
 
 function isTyping(e: KeyboardEvent) {
@@ -74,6 +76,7 @@ export function Viewer(props: Props) {
 
 function LoadedViewer({
   entry,
+  entries,
   parsed,
   refreshing,
   theme,
@@ -88,11 +91,13 @@ function LoadedViewer({
   const { log, events, analysis } = parsed;
   const group = useMemo(() => new ChartGroup({ start: 0, end: 1 }), [entry.key]);
   const initialised = useRef(false);
-  const [channels, setChannels] = useState<number[]>(() => defaultChannels(log));
+  // Which Graphs rows are unfolded, and the one the keyboard is on. Kept here so they survive tab switches.
+  const [graphOpen, setGraphOpen] = useState<string[]>([]);
+  const [graphSel, setGraphSel] = useState<string | null>(null);
   const [eventFilter, setEventFilter] = useState<EventFilter & { nonce: number }>({ nonce: 0 });
   const [menu, setMenu] = useState<'more' | null>(null);
   useEffect(() => {
-    if (tab !== 'details') setEventFilter({ nonce: 0 });
+    if (tab !== 'messages') setEventFilter({ nonce: 0 });
   }, [tab]);
 
   // Keep the sync group in step with the (possibly growing) log.
@@ -139,21 +144,26 @@ function LoadedViewer({
   const labels = settings.channelLabels[labelKey];
 
   const jumpTo = useCallback(
-    (t: number, opts?: { chart?: ChartId; width?: number }) => {
+    (t: number, opts?: JumpOpts) => {
       if (!Number.isFinite(t) || !log) return;
       setTab('graphs');
       const current = group.range.end - group.range.start;
       const width = opts?.width ?? Math.min(20, current);
       group.focusOn(t, Math.max(width, 2));
-      if (opts?.chart)
-        setTimeout(() => document.getElementById(`chart-${opts.chart}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }), 60);
+      // Unfold the rows that show it, so the answer is on screen.
+      const ids = opts?.signal ? (/^ch\d+$/.test(opts.signal) ? ['channels', opts.signal] : [opts.signal]) : opts?.chart ? CHART_SIGNALS[opts.chart] : [];
+      if (ids.length) {
+        setGraphOpen((o) => [...new Set([...o, ...ids])]);
+        setGraphSel(ids[ids.length - 1]);
+        setTimeout(() => document.getElementById(`sig-${ids[ids.length - 1]}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }), 80);
+      }
     },
     [group, log, setTab],
   );
 
   const showEvents = useCallback(
     (filter: EventFilter) => {
-      setTab('details');
+      setTab('messages');
       setEventFilter({ ...filter, nonce: Date.now() });
     },
     [setTab],
@@ -170,7 +180,7 @@ function LoadedViewer({
     const onKey = (e: KeyboardEvent) => {
       if (isTyping(e) || e.ctrlKey || e.metaKey || e.altKey) return;
       const m = analysis.match;
-      const tabs: Tab[] = ['overview', 'graphs', 'power', 'details'];
+      const tabs: Tab[] = ['board', 'graphs', 'messages', 'info'];
       const pad = (a: number, b: number) => group.setRange(a - 2, b + 2);
       const onGraphs = tab === 'graphs';
       switch (e.key) {
@@ -223,14 +233,14 @@ function LoadedViewer({
           break;
         }
         case '/':
-          if (tab === 'details') {
+          if (tab === 'messages') {
             e.preventDefault();
-            window.dispatchEvent(new Event('pitview:search-messages'));
+            document.getElementById('events-search')?.focus();
           }
           break;
         case 'Escape':
-          if (group.pinned != null) group.pin(null, false);
-          else if (tab !== 'overview') setTab('overview');
+          if (tab === 'graphs' && group.pinned != null) group.pin(null, false);
+          else if (tab !== 'board') setTab('board');
           break;
       }
     };
@@ -370,7 +380,7 @@ function LoadedViewer({
   );
 
   return (
-    <div className="viewer">
+    <div className={`viewer ${tab === 'board' ? 'viewer-board' : ''}`}>
       {headSlot ? createPortal(head, headSlot) : <div className="viewer-head">{head}</div>}
       {tabBar('tabs-strip')}
       {parsed.warnings.length > 0 && (
@@ -380,19 +390,23 @@ function LoadedViewer({
           </div>
         </div>
       )}
-      {tab === 'overview' && <RobotMap ctx={ctx} />}
-      {tab === 'details' && <Overview ctx={ctx} eventFilter={eventFilter} />}
-      {tab === 'graphs' && <Graphs ctx={ctx} channels={channels} setChannels={setChannels} />}
-      {tab === 'power' && <Power ctx={ctx} channels={channels} setChannels={setChannels} />}
+      {tab === 'board' && <Board ctx={ctx} entries={entries} />}
+      {tab === 'graphs' && <Graphs ctx={ctx} open={graphOpen} setOpen={setGraphOpen} sel={graphSel} setSel={setGraphSel} />}
+      {tab === 'messages' && (
+        <div className="page">
+          <EventsView ctx={ctx} initial={eventFilter} />
+        </div>
+      )}
+      {tab === 'info' && <Info ctx={ctx} />}
       <KeyBar
         keys={
-          tab === 'overview'
-            ? [['← → ↑ ↓', 'move'], ['Enter', 'graph'], ['Space', 'checked']]
+          tab === 'board'
+            ? [['← → ↑ ↓', 'move'], ['Space', 'unfold'], ['Enter', 'details'], ['J K', 'unusual'], ['X', 'checked'], ['G M', 'graphs · messages']]
             : tab === 'graphs'
-              ? [['← →', 'pan'], ['+ −', 'zoom'], ['A T M F', 'auto · teleop · match · all'], ['J K', 'prev / next problem'], ['Esc', 'back']]
-              : tab === 'details'
-                ? [['/', 'search messages'], ['Esc', 'back']]
-                : [['Esc', 'back']]
+              ? [['↑ ↓', 'rows'], ['Space', 'unfold'], ['← →', 'pan'], ['+ −', 'zoom'], ['A T M F', 'auto · teleop · match · all'], ['Esc', 'board']]
+              : tab === 'messages'
+                ? [['↑ ↓', 'move'], ['Enter', 'open'], ['G', 'on the graphs'], ['/', 'search'], ['Esc', 'board']]
+                : [['↑ ↓', 'move'], ['Space', 'unfold'], ['Esc', 'board']]
         }
       />
     </div>

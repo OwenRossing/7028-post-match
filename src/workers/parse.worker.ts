@@ -1,5 +1,6 @@
 /// <reference lib="webworker" />
-import { analyze, summarize } from '../lib/analysis';
+import { analyze, computeStats, summarize } from '../lib/analysis';
+import { boardMetrics, buildBoard } from '../lib/board';
 import { parseDSEvents, type DSEventsFile } from '../lib/dsevents';
 import { dslogTransferables, parseDSLog, type DSLog } from '../lib/dslog';
 import type { WorkerRequest, WorkerResponse } from '../lib/workerClient';
@@ -32,7 +33,11 @@ ctx.onmessage = (e: MessageEvent<WorkerRequest>) => {
     if (!log && !events) throw new Error(logError ?? eventsError ?? 'No readable log files');
 
     if (kind === 'summary') {
-      const res: WorkerResponse = { id, ok: true, summary: summarize(log, events) };
+      const analysis = analyze(log, events);
+      const stats = computeStats(log, events, analysis, analysis.focus);
+      const summary = summarize(log, events, analysis, stats);
+      summary.metrics = boardMetrics(buildBoard(log, events, analysis, stats));
+      const res: WorkerResponse = { id, ok: true, summary };
       ctx.postMessage(res);
     } else {
       const warnings = [logError && `.dslog: ${logError}`, eventsError && `.dsevents: ${eventsError}`].filter(Boolean) as string[];

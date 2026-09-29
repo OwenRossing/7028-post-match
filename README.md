@@ -2,10 +2,12 @@
 
 Open `.dslog` / `.dsevents` files from the FRC Driver Station and get:
 
+- **The Board**: one screen per match, built for the DS laptop plugged into a pit TV. Power, Network, RIO, Code, Devices and Performance columns, down to each PDH channel, CAN device and message. Every number is compared with the robot's last 15 matches, and anything 2+ standard deviations worse turns red. Everything starts folded; arrow keys move, <kbd>Space</kbd> unfolds, <kbd>Enter</kbd> opens the detail (history, the moment in the match, related messages), <kbd>J</kbd>/<kbd>K</kbd> jump between red cells and <kbd>X</kbd> ticks one off.
+- **Your own numbers**: print `[pv] Flywheel/Spinup = 0.42 s` from robot code and it becomes a Performance row, compared across matches like everything else.
 - **A plain-English health report**: brownouts, battery sag, resting voltage, comms drops (and whether you were enabled), robot code going unresponsive, roboRIO rail faults, CAN device errors, loop overruns with the slowest step named, NetworkTables/camera disconnects, outdated radio firmware, and more. Every finding links to the moment it happened.
-- **Synced, zoomable graphs**: battery, total current, trip time and packet loss, roboRIO CPU and CAN, Wi‑Fi, and per-channel PDH/PDP current. Auto/teleop/no-comms/brownout bands, error markers, a whole-log navigator, and match/log/clock time axes.
-- **Messages**: searchable, filterable errors, warnings, prints, DS and FMS messages. Repeats can be grouped, stack traces expanded, and every message jumps to the graphs.
-- **Power**: a channel × time current heatmap and per-channel average/peak/charge used. Name your channels once per team and the names show up everywhere.
+- **Synced, zoomable graphs**: battery, total current, trip time and packet loss, roboRIO CPU and CAN, Wi‑Fi, and every PDH/PDP channel, each as a one-line strip that unfolds into a full chart. The channels together read as a current heatmap; name them once per team (<kbd>N</kbd>) and the names show up everywhere. Auto/teleop/no-comms/brownout bands, error markers, a whole-log navigator, and match/log/clock time axes.
+- **Messages**: searchable, filterable errors, warnings, prints, DS and FMS messages. Repeats are grouped, stack traces expand, and every message jumps to the graphs.
+- **Info**: event, match, robot code and roboRIO versions, controllers, enabled periods and the files behind the log.
 - **Compare**: overlay 2–6 logs lined up by match start, with a side-by-side stats table.
 - **Library**: every log you open is listed and grouped by day and event, with match labels, min voltage and problem counts. Search it and filter by Matches, Enabled, or Issues.
 - **Export**: CSV (visible range or whole log), messages CSV, chart PNGs, and a copy-paste summary for Discord or Slack.

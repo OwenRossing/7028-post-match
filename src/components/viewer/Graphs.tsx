@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type uPlot from 'uplot';
-import { BROWNOUT_VOLTS, type ChartId } from '../../lib/analysis';
+import { BROWNOUT_VOLTS, type ChartId, type Span } from '../../lib/analysis';
 import type { DSEvent, EventKind } from '../../lib/dsevents';
 import type { DSLog } from '../../lib/dslog';
 import { chartsToPng, download, safeFileName } from '../../lib/export';
@@ -8,8 +8,9 @@ import { channelName, updateSettings, type TimeMode } from '../../lib/settings';
 import { channelColor } from '../../lib/theme';
 import { Icon } from '../Icon';
 import { Navigator, TimelineLegend } from '../Navigator';
-import { TimeChart, type AxisSpec, type SeriesSpec, type Threshold } from '../TimeChart';
+import { TimeChart, type AxisSpec, type Threshold } from '../TimeChart';
 import { Moment } from './Moment';
+import { Strip } from './Strip';
 import { useGroupValue, type ViewCtx } from './types';
 
 export function toNullable(a: Float32Array): (number | null)[] {
@@ -18,183 +19,304 @@ export function toNullable(a: Float32Array): (number | null)[] {
   return out;
 }
 
-interface ChartDef {
-  id: ChartId;
-  title: string;
-  help: string;
-  height: number;
-  series: SeriesSpec[];
-  axes: AxisSpec[];
-  thresholds?: Threshold[];
-}
-
-const pad = (min: number | null, max: number | null, lo: number, hi: number): [number, number] => [
-  Math.min(min ?? lo, lo),
-  Math.max(max ?? hi, hi),
-];
-
-export const CHART_NAMES: Record<ChartId, string> = {
-  voltage: 'Battery voltage',
-  current: 'Total current',
-  comms: 'Comms',
-  cpu: 'roboRIO CPU & CAN',
-  wifi: 'Wi-Fi (field radio)',
-  channels: 'Power channels',
+/** The signal rows an analysis chart id stands for (findings and the Board point at these). */
+export const CHART_SIGNALS: Record<ChartId, string[]> = {
+  voltage: ['voltage'],
+  current: ['total'],
+  comms: ['trip', 'loss'],
+  cpu: ['cpu', 'can'],
+  wifi: ['wifiDb', 'wifiMb'],
+  channels: ['channels'],
 };
 
-/** Default channels to plot: the ones that used the most charge. */
-export function defaultChannels(log: DSLog | null, n = 6): number[] {
-  if (!log?.channelCount) return [];
-  const scored = log.currents.map((arr, ch) => {
-    let sum = 0;
-    for (let i = 0; i < arr.length; i++) if (!Number.isNaN(arr[i])) sum += arr[i];
-    return { ch, sum };
-  });
-  return scored
-    .filter((s) => s.sum > 0)
-    .sort((a, b) => b.sum - a.sum)
-    .slice(0, n)
-    .map((s) => s.ch)
-    .sort((a, b) => a - b);
+type Section = 'Power' | 'Network' | 'RIO';
+
+interface Signal {
+  id: string;
+  section: Section;
+  name: string;
+  arr: Float32Array;
+  color: string;
+  unit: string;
+  digits: number;
+  /** The number shown for the visible range. */
+  stat: 'min' | 'max' | 'avg';
+  lo?: number;
+  hi?: number;
+  low?: boolean;
+  axis: AxisSpec;
+  thresholds?: Threshold[];
+  help: string;
 }
 
-export function useChannelArrays(log: DSLog | null, channels: number[]) {
-  const cache = useRef<{ log: DSLog | null; map: Map<number, (number | null)[]> }>({ log: null, map: new Map() });
-  return useMemo(() => {
-    if (cache.current.log !== log) cache.current = { log, map: new Map() };
-    const map = cache.current.map;
-    for (const ch of channels) if (log && !map.has(ch)) map.set(ch, toNullable(log.currents[ch]));
-    return map;
-  }, [log, channels]);
+const STAT_WORD = { min: 'lowest', max: 'peak', avg: 'avg' } as const;
+
+function statIn(log: DSLog, arr: Float32Array, range: Span, kind: Signal['stat']): number {
+  const i0 = Math.max(0, Math.floor(range.start / log.period));
+  const i1 = Math.min(log.count - 1, Math.ceil(range.end / log.period));
+  let sum = 0;
+  let n = 0;
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (let i = i0; i <= i1; i++) {
+    const v = arr[i];
+    if (Number.isNaN(v)) continue;
+    sum += v;
+    n++;
+    if (v < lo) lo = v;
+    if (v > hi) hi = v;
+  }
+  if (!n) return NaN;
+  return kind === 'min' ? lo : kind === 'max' ? hi : sum / n;
 }
 
+const chId = (ch: number) => `ch${ch}`;
+
+/**
+ * Graphs: every signal as one folded row with a strip of the visible range. Space or Enter unfolds the full
+ * chart. Power channels are a folded group whose rows together read like a heatmap.
+ */
 export function Graphs({
   ctx,
-  channels,
-  setChannels,
+  open,
+  setOpen,
+  sel,
+  setSel,
 }: {
   ctx: ViewCtx;
-  channels: number[];
-  setChannels: (c: number[]) => void;
+  open: string[];
+  setOpen: (fn: (o: string[]) => string[]) => void;
+  sel: string | null;
+  setSel: (id: string | null) => void;
 }) {
-  const { parsed, group, theme, settings, tf } = ctx;
+  const { parsed, group, theme, settings, tf, labels, labelKey } = ctx;
   const { log, analysis } = parsed;
+  const range = useGroupValue(group, 'range', () => group.range);
   const [showMenu, setShowMenu] = useState(false);
+  const [renaming, setRenaming] = useState<number | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
 
-  const arrays = useMemo(
-    () =>
-      log && {
-        volt: toNullable(log.voltage),
-        trip: toNullable(log.tripMs),
-        loss: toNullable(log.packetLoss),
-        cpu: toNullable(log.cpu),
-        can: toNullable(log.can),
-        db: toNullable(log.wifiDb),
-        mb: toNullable(log.wifiMb),
-        total: toNullable(log.totalCurrent),
-      },
-    [log],
-  );
-  const chArrays = useChannelArrays(log, channels);
-  const wifiAvailable = useMemo(() => {
-    if (!log) return false;
-    for (let i = 0; i < log.count; i++) if (log.wifiDb[i] > 0 || log.wifiMb[i] > 0) return true;
-    return false;
-  }, [log]);
-
-  const charts: ChartDef[] = useMemo(() => {
-    if (!log || !arrays) return [];
+  const signals = useMemo<Signal[]>(() => {
+    if (!log) return [];
     const c = theme.c;
-    const list: ChartDef[] = [
+    const pct = (v: number) => `${v}%`;
+    const list: Signal[] = [
       {
         id: 'voltage',
-        title: CHART_NAMES.voltage,
-        help: 'Dips mean high current draw or a tired battery. Below ~6.8 V the roboRIO browns out and disables motors.',
-        height: 200,
-        series: [{ label: 'Battery', color: c.volt, data: arrays.volt, scale: 'v', width: 1.6, fmt: (v) => `${v.toFixed(2)} V` }],
-        axes: [{ scale: 'v', fmt: (v) => `${v}V`, range: (min, max) => pad(min, max, 6.3, 13) }],
-        thresholds: [{ value: BROWNOUT_VOLTS, scale: 'v', color: theme.brownout, label: 'brownout' }],
+        section: 'Power',
+        name: 'Battery voltage',
+        arr: log.voltage,
+        color: c.volt,
+        unit: 'V',
+        digits: 2,
+        stat: 'min',
+        low: true,
+        axis: { scale: 'y', fmt: (v) => `${v}V`, range: (min, max) => [Math.min(min ?? 6.3, 6.3), Math.max(max ?? 13, 13)] },
+        thresholds: [{ value: BROWNOUT_VOLTS, scale: 'y', color: theme.brownout, label: 'brownout' }],
+        help: 'Dips mean high current draw or a tired battery. Below ~6.8 V the roboRIO browns out.',
       },
     ];
     if (log.channelCount)
       list.push({
-        id: 'current',
-        title: CHART_NAMES.current,
+        id: 'total',
+        section: 'Power',
+        name: 'Total current',
+        arr: log.totalCurrent,
+        color: c.current,
+        unit: 'A',
+        digits: 0,
+        stat: 'max',
+        lo: 0,
+        axis: { scale: 'y', fmt: (v) => `${v}A`, range: (_min, max) => [0, Math.max((max ?? 10) * 1.08, 10)] },
         help: 'Sum of every power distribution channel.',
-        height: 160,
-        series: [{ label: 'Total', color: c.current, data: arrays.total, scale: 'a', fill: true, fmt: (v) => `${v.toFixed(1)} A` }],
-        axes: [{ scale: 'a', fmt: (v) => `${v}A`, range: (_min, max) => [0, Math.max((max ?? 10) * 1.08, 10)] }],
       });
     list.push(
       {
-        id: 'comms',
-        title: CHART_NAMES.comms,
-        help: 'Round-trip time and packet loss between the DS and robot. Gray bands mean no robot comms.',
-        height: 160,
-        series: [
-          { label: 'Trip time', color: c.trip, data: arrays.trip, scale: 'ms', fmt: (v) => `${v.toFixed(1)} ms` },
-          { label: 'Packet loss', color: c.loss, data: arrays.loss, scale: 'pct', fmt: (v) => `${v.toFixed(0)}%` },
-        ],
-        axes: [
-          { scale: 'ms', fmt: (v) => `${v}ms`, range: (_min, max) => [0, Math.max((max ?? 10) * 1.1, 10)] },
-          { scale: 'pct', side: 'right', fmt: (v) => `${v}%`, range: () => [0, 100] },
-        ],
+        id: 'trip',
+        section: 'Network',
+        name: 'Trip time',
+        arr: log.tripMs,
+        color: c.trip,
+        unit: 'ms',
+        digits: 1,
+        stat: 'avg',
+        lo: 0,
+        axis: { scale: 'y', fmt: (v) => `${v}ms`, range: (_min, max) => [0, Math.max((max ?? 10) * 1.1, 10)] },
+        help: 'Round trip between the DS and the robot. Gray bands mean no robot comms.',
       },
       {
-        id: 'cpu',
-        title: CHART_NAMES.cpu,
-        help: 'roboRIO processor load and CAN bus utilization. Orange strip at the bottom: robot code not reporting (slow loop or stuck code).',
-        height: 160,
-        series: [
-          { label: 'CPU', color: c.cpu, data: arrays.cpu, scale: 'pct', fmt: (v) => `${v.toFixed(0)}%` },
-          { label: 'CAN', color: c.can, data: arrays.can, scale: 'pct', fmt: (v) => `${v.toFixed(0)}%` },
-        ],
-        axes: [{ scale: 'pct', fmt: (v) => `${v}%`, range: () => [0, 100] }],
+        id: 'loss',
+        section: 'Network',
+        name: 'Packet loss',
+        arr: log.packetLoss,
+        color: c.loss,
+        unit: '%',
+        digits: 1,
+        stat: 'avg',
+        lo: 0,
+        hi: 100,
+        axis: { scale: 'y', fmt: pct, range: () => [0, 100] },
+        help: 'Share of DS packets that got no answer.',
       },
     );
-    if (wifiAvailable)
-      list.push({
-        id: 'wifi',
-        title: CHART_NAMES.wifi,
-        help: 'Signal strength and bandwidth reported by the field radio (only on the field).',
-        height: 150,
-        series: [
-          { label: 'Signal', color: c.wifiDb, data: arrays.db, scale: 'db', fmt: (v) => `${v.toFixed(1)} dB` },
-          { label: 'Bandwidth', color: c.wifiMb, data: arrays.mb, scale: 'mb', fmt: (v) => `${v.toFixed(2)} Mb/s` },
-        ],
-        axes: [
-          { scale: 'db', fmt: (v) => `${v}dB` },
-          { scale: 'mb', side: 'right', fmt: (v) => `${v}Mb` },
-        ],
-      });
-    if (log.channelCount)
-      list.push({
-        id: 'channels',
-        title: CHART_NAMES.channels,
-        help: 'Per-channel current. Pick channels below or name them on the Power tab.',
-        height: 200,
-        series: channels.map((ch) => ({
-          label: channelName(ctx.labels, ch),
-          color: channelColor(ch, theme.dark),
-          data: chArrays.get(ch) ?? [],
-          scale: 'a',
-          fmt: (v: number) => `${v.toFixed(1)} A`,
-        })),
-        axes: [{ scale: 'a', fmt: (v) => `${v}A`, range: (_min, max) => [0, Math.max((max ?? 5) * 1.08, 5)] }],
-      });
+    if (hasWifi(log))
+      list.push(
+        {
+          id: 'wifiDb',
+          section: 'Network',
+          name: 'Wi-Fi signal',
+          arr: log.wifiDb,
+          color: c.wifiDb,
+          unit: 'dB',
+          digits: 1,
+          stat: 'avg',
+          axis: { scale: 'y', fmt: (v) => `${v}dB` },
+          help: 'Signal strength reported by the field radio (only on the field).',
+        },
+        {
+          id: 'wifiMb',
+          section: 'Network',
+          name: 'Wi-Fi bandwidth',
+          arr: log.wifiMb,
+          color: c.wifiMb,
+          unit: 'Mb/s',
+          digits: 2,
+          stat: 'avg',
+          lo: 0,
+          axis: { scale: 'y', fmt: (v) => `${v}Mb` },
+          help: 'Bandwidth reported by the field radio.',
+        },
+      );
+    list.push(
+      {
+        id: 'cpu',
+        section: 'RIO',
+        name: 'CPU',
+        arr: log.cpu,
+        color: c.cpu,
+        unit: '%',
+        digits: 0,
+        stat: 'avg',
+        lo: 0,
+        hi: 100,
+        axis: { scale: 'y', fmt: pct, range: () => [0, 100] },
+        help: 'roboRIO processor load. The orange strip on the chart is robot code not reporting.',
+      },
+      {
+        id: 'can',
+        section: 'RIO',
+        name: 'CAN bus',
+        arr: log.can,
+        color: c.can,
+        unit: '%',
+        digits: 0,
+        stat: 'avg',
+        lo: 0,
+        hi: 100,
+        axis: { scale: 'y', fmt: pct, range: () => [0, 100] },
+        help: 'roboRIO CAN bus utilization.',
+      },
+    );
     return list;
-  }, [log, arrays, theme, wifiAvailable, channels, chArrays, ctx.labels]);
+  }, [log, theme]);
 
-  const visible = charts.filter((c) => !settings.hiddenCharts.includes(c.id));
-  const rev = `${ctx.entry.key}|${log?.count}|${tf.mode}|${tf.base}|${theme.dark}|${channels.join(',')}|${ctx.labels?.join(',')}`;
+  // Converted lazily, only for charts that are open.
+  const nullable = useRef<{ log: DSLog | null; map: Map<Float32Array, (number | null)[]> }>({ log: null, map: new Map() });
+  if (nullable.current.log !== log) nullable.current = { log, map: new Map() };
+  const dataOf = (a: Float32Array) => {
+    let d = nullable.current.map.get(a);
+    if (!d) nullable.current.map.set(a, (d = toNullable(a)));
+    return d;
+  };
+
+  const channelPeak = useMemo(() => {
+    let p = 1;
+    for (const arr of log?.currents ?? []) for (let i = 0; i < arr.length; i++) if (arr[i] > p) p = arr[i];
+    return p;
+  }, [log]);
+  const usedChannel = useMemo(() => (log?.currents ?? []).map((arr) => arr.some((v) => v >= 1)), [log]);
+
+  const isOpen = (id: string) => open.includes(id);
+  const toggle = (id: string, force?: boolean) =>
+    setOpen((o) => ((force ?? !o.includes(id)) ? [...new Set([...o, id])] : o.filter((x) => x !== id)));
+
+  // Rows in screen order, for the keyboard.
+  const order = useMemo(() => {
+    const ids: string[] = [];
+    for (const s of signals) {
+      ids.push(s.id);
+      if (s.id === 'total' && log?.channelCount) {
+        ids.push('channels');
+        if (isOpen('channels')) for (let ch = 0; ch < log.channelCount; ch++) ids.push(chId(ch));
+      }
+    }
+    return ids;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signals, open, log]);
+  const cur = sel && order.includes(sel) ? sel : sel?.startsWith('ch') ? 'channels' : order[0];
+
+  useEffect(() => {
+    rootRef.current?.querySelector(`[data-sig="${cur}"]`)?.scrollIntoView({ block: 'nearest' });
+  }, [cur]);
+
+  const onKey = useRef<(e: KeyboardEvent) => void>(() => undefined);
+  onKey.current = (e: KeyboardEvent) => {
+    const el = e.target as HTMLElement | null;
+    if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+    if (e.ctrlKey || e.metaKey || e.altKey || document.querySelector('.modal-back') || !cur) return;
+    const i = order.indexOf(cur);
+    let handled = true;
+    switch (e.key) {
+      case 'ArrowDown':
+        setSel(order[Math.min(order.length - 1, i + 1)]);
+        break;
+      case 'ArrowUp':
+        setSel(order[Math.max(0, i - 1)]);
+        break;
+      case ' ':
+      case 'Enter':
+        toggle(cur);
+        break;
+      case 'e': {
+        const tops = order.filter((id) => !id.startsWith('ch') || id === 'channels');
+        const anyClosed = tops.some((id) => !isOpen(id));
+        setOpen((o) => (anyClosed ? [...new Set([...o, ...tops])] : []));
+        break;
+      }
+      case 'n':
+        if (/^ch\d+$/.test(cur)) setRenaming(Number(cur.slice(2)));
+        else handled = false;
+        break;
+      default:
+        handled = false;
+    }
+    if (handled) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    }
+  };
+  useEffect(() => {
+    const f = (e: KeyboardEvent) => onKey.current(e);
+    window.addEventListener('keydown', f, true);
+    return () => window.removeEventListener('keydown', f, true);
+  }, []);
+
+  const setLabel = (ch: number, value: string) =>
+    updateSettings((s) => {
+      const arr = [...(s.channelLabels[labelKey] ?? [])];
+      arr[ch] = value.trim();
+      return { channelLabels: { ...s.channelLabels, [labelKey]: arr } };
+    });
 
   const zoomTo = (start: number, end: number) => group.setRange(start - 2, end + 2);
   const match = analysis.match;
+  const rev = `${ctx.entry.key}|${log?.count}|${tf.mode}|${tf.base}|${theme.dark}|${labels?.join(',')}`;
 
   const exportPng = async () => {
     const plots = [...group.plots].sort((a: uPlot, b: uPlot) =>
       a.root.compareDocumentPosition(b.root) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
     );
+    if (!plots.length) return;
     const blob = await chartsToPng(plots, `${analysis.title} — ${ctx.entry.key}`, theme.panel, theme.text);
     download(blob, `${safeFileName(`${analysis.title} ${ctx.entry.key}`)}.png`);
   };
@@ -203,18 +325,166 @@ export function Graphs({
     return (
       <div className="page">
         <div className="banner info">
-          <Icon name="info" /> No .dslog file for this log, so there is nothing to graph. The messages under Details still work.
+          <Icon name="info" /> No .dslog file for this log, so there is nothing to graph. Messages still work.
         </div>
       </div>
     );
 
+  const chart = (
+    id: string,
+    name: string,
+    arr: Float32Array,
+    color: string,
+    unit: string,
+    digits: number,
+    axis: AxisSpec,
+    thresholds?: Threshold[],
+  ) => (
+    <div className="g-chart">
+      <TimeChart
+        group={group}
+        x={log.time}
+        series={[
+          { label: name, color, data: dataOf(arr), scale: 'y', width: 1.6, fill: unit === 'A', fmt: (v) => `${v.toFixed(digits)} ${unit}` },
+        ]}
+        axes={[axis]}
+        thresholds={thresholds}
+        height={170}
+        theme={theme}
+        rev={`${id}|${rev}`}
+      />
+    </div>
+  );
+
+  const signalRow = (s: Signal) => {
+    const v = statIn(log, s.arr, range, s.stat);
+    const on = isOpen(s.id);
+    return (
+      <div key={s.id} className={`g-item ${on ? 'open' : ''}`} id={`sig-${s.id}`}>
+        <div className={`g-row ${cur === s.id ? 'sel' : ''}`} data-sig={s.id} onClick={() => (setSel(s.id), toggle(s.id))} title={s.help}>
+          <Chevron open={on} />
+          <span className="g-name">
+            <i className="g-swatch" style={{ background: s.color }} />
+            {s.name}
+          </span>
+          <span className="g-stat">
+            <small>{STAT_WORD[s.stat]}</small>
+            {Number.isFinite(v) ? v.toFixed(s.digits) : '–'}
+            <small>{s.unit}</small>
+          </span>
+          <Strip ctx={ctx} log={log} arr={s.arr} range={range} mode="line" color={s.color} lo={s.lo} hi={s.hi} low={s.low} theme={theme} />
+        </div>
+        {on && chart(s.id, s.name, s.arr, s.color, s.unit, s.digits, s.axis, s.thresholds)}
+      </div>
+    );
+  };
+
+  const channelsGroup = () => {
+    const on = isOpen('channels');
+    const used = usedChannel.filter(Boolean).length;
+    return (
+      <div key="channels" className={`g-item group ${on ? 'open' : ''}`} id="sig-channels">
+        <div
+          className={`g-row ${cur === 'channels' ? 'sel' : ''}`}
+          data-sig="channels"
+          onClick={() => (setSel('channels'), toggle('channels'))}
+        >
+          <Chevron open={on} />
+          <span className="g-name">
+            Channels <span className="g-count">{used} used</span>
+          </span>
+          <span className="g-stat">
+            <small>of</small>
+            {log.channelCount}
+          </span>
+          <Strip ctx={ctx} log={log} arr={log.totalCurrent} range={range} mode="heat" color="" theme={theme} />
+        </div>
+        {on && (
+          <div className="g-children">
+            {log.currents.map((arr, ch) => {
+              const id = chId(ch);
+              const chOpen = isOpen(id);
+              const peak = statIn(log, arr, range, 'max');
+              const name = channelName(labels, ch);
+              return (
+                <div key={id} className={`g-item ${chOpen ? 'open' : ''} ${usedChannel[ch] ? '' : 'unused'}`} id={`sig-${id}`}>
+                  <div className={`g-row child ${cur === id ? 'sel' : ''}`} data-sig={id} onClick={() => (setSel(id), toggle(id))}>
+                    <Chevron open={chOpen} />
+                    <span className="g-name" onDoubleClick={(e) => (e.stopPropagation(), setRenaming(ch))}>
+                      <i className="g-swatch" style={{ background: channelColor(ch, theme.dark) }} />
+                      {renaming === ch ? (
+                        <input
+                          className="g-rename"
+                          autoFocus
+                          defaultValue={labels?.[ch] ?? ''}
+                          placeholder={`Ch ${ch}`}
+                          onClick={(e) => e.stopPropagation()}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                            if (e.key === 'Escape') {
+                              e.stopPropagation();
+                              setRenaming(null);
+                            }
+                          }}
+                          onBlur={(e) => {
+                            if (renaming === ch) setLabel(ch, e.target.value);
+                            setRenaming(null);
+                          }}
+                        />
+                      ) : (
+                        <>
+                          {name}
+                          {labels?.[ch]?.trim() && <span className="g-count">{ch}</span>}
+                        </>
+                      )}
+                    </span>
+                    <span className="g-stat">
+                      <small>peak</small>
+                      {Number.isFinite(peak) ? peak.toFixed(0) : '–'}
+                      <small>A</small>
+                    </span>
+                    <Strip ctx={ctx} log={log} arr={arr} range={range} mode="heat" color="" hi={channelPeak} theme={theme} />
+                  </div>
+                  {chOpen &&
+                    chart(id, name, arr, channelColor(ch, theme.dark), 'A', 1, {
+                      scale: 'y',
+                      fmt: (v) => `${v}A`,
+                      range: (_min, max) => [0, Math.max((max ?? 5) * 1.08, 5)],
+                    })}
+                </div>
+              );
+            })}
+            <p className="g-note">
+              Press <kbd>N</kbd> or double-click a channel to name it. Names are saved in this browser
+              {labelKey.startsWith('any') ? '' : ` for team ${labelKey.split(':')[0]}`} and used everywhere.
+            </p>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const sections: Section[] = ['Power', 'Network', 'RIO'];
+
   return (
-    <div className="page graphs-page">
+    <div className="page graphs-page" ref={rootRef}>
       <div className="toolbar">
         <div className="seg" aria-label="Zoom to">
-          {match && <button onClick={() => zoomTo(match.start, match.end)} title="Whole match (M)">Match</button>}
-          {match?.autoStart != null && <button onClick={() => zoomTo(match.autoStart!, match.autoEnd!)} title="Autonomous (A)">Auto</button>}
-          {match?.teleopStart != null && <button onClick={() => zoomTo(match.teleopStart!, match.teleopEnd!)} title="Teleop (T)">Teleop</button>}
+          {match && (
+            <button onClick={() => zoomTo(match.start, match.end)} title="Whole match (M)">
+              Match
+            </button>
+          )}
+          {match?.autoStart != null && (
+            <button onClick={() => zoomTo(match.autoStart!, match.autoEnd!)} title="Autonomous (A)">
+              Auto
+            </button>
+          )}
+          {match?.teleopStart != null && (
+            <button onClick={() => zoomTo(match.teleopStart!, match.teleopEnd!)} title="Teleop (T)">
+              Teleop
+            </button>
+          )}
           {!match && analysis.runs.length > 0 && (
             <button onClick={() => zoomTo(analysis.focus.start, analysis.focus.end)} title="Enabled time (M)">
               Enabled
@@ -260,7 +530,13 @@ export function Graphs({
                         style={{ flex: 1 }}
                         className={settings.timeMode === m ? 'on' : ''}
                         onClick={() => updateSettings({ timeMode: m })}
-                        title={m === 'match' ? 'Seconds from the start of auto' : m === 'log' ? 'Seconds from the start of the log' : 'Wall clock time'}
+                        title={
+                          m === 'match'
+                            ? 'Seconds from the start of auto'
+                            : m === 'log'
+                              ? 'Seconds from the start of the log'
+                              : 'Wall clock time'
+                        }
                       >
                         {m === 'match' ? 'Match' : m === 'log' ? 'Log' : 'Clock'}
                       </button>
@@ -268,25 +544,13 @@ export function Graphs({
                   </div>
                 </div>
                 <label className="item">
-                  <input type="checkbox" checked={settings.showMarkers} onChange={(e) => updateSettings({ showMarkers: e.target.checked })} />
+                  <input
+                    type="checkbox"
+                    checked={settings.showMarkers}
+                    onChange={(e) => updateSettings({ showMarkers: e.target.checked })}
+                  />
                   Show error markers
                 </label>
-                <hr />
-                <div className="menu-label">Charts</div>
-                {charts.map((c) => (
-                  <label key={c.id} className="item">
-                    <input
-                      type="checkbox"
-                      checked={!settings.hiddenCharts.includes(c.id)}
-                      onChange={(e) =>
-                        updateSettings((st) => ({
-                          hiddenCharts: e.target.checked ? st.hiddenCharts.filter((x) => x !== c.id) : [...st.hiddenCharts, c.id],
-                        }))
-                      }
-                    />
-                    {c.title}
-                  </label>
-                ))}
                 <hr />
                 <button
                   className="item"
@@ -294,10 +558,13 @@ export function Graphs({
                     setShowMenu(false);
                     void exportPng();
                   }}
+                  disabled={!open.length}
                 >
-                  <Icon name="image" /> Save charts as PNG
+                  <Icon name="image" /> Save open charts as PNG
                 </button>
-                <div className="menu-note faint">Drag on a chart to zoom · Shift+drag to pan · double-click to reset · click to pin a time</div>
+                <div className="menu-note faint">
+                  Drag on a chart to zoom · Shift+drag to pan · double-click to reset · click to pin a time
+                </div>
               </div>
             </>
           )}
@@ -306,46 +573,24 @@ export function Graphs({
 
       <div className="card">
         <div className="card-body" style={{ paddingTop: 8, paddingBottom: 8 }}>
-          <Navigator group={group} analysis={analysis} log={log} theme={theme} height={52} />
+          <Navigator group={group} analysis={analysis} log={log} theme={theme} height={46} />
         </div>
       </div>
 
       <Moment ctx={ctx} />
 
       <div className={`graphs ${settings.eventsPanelOpen && parsed.events ? '' : 'no-panel'}`}>
-        <div className="stack" style={{ gap: 12 }}>
-          {visible.map((c) => (
-            <div className="card chart-card" key={c.id} id={`chart-${c.id}`}>
-              <div className="chart-title">
-                {c.title}
-                <span className="help hide-sm">{c.help}</span>
-              </div>
-              {c.id === 'channels' && (
-                <ChannelPicker ctx={ctx} channels={channels} setChannels={setChannels} />
-              )}
-              {c.series.length > 0 ? (
-                <TimeChart
-                  group={group}
-                  x={log.time}
-                  series={c.series}
-                  axes={c.axes}
-                  thresholds={c.thresholds}
-                  height={c.height}
-                  theme={theme}
-                  rev={rev}
-                />
-              ) : (
-                <p className="muted" style={{ margin: '12px 0' }}>
-                  Pick channels to plot.
-                </p>
-              )}
-            </div>
-          ))}
-          {!visible.length && (
-            <div className="banner info">
-              <Icon name="info" /> All charts are hidden. Use the Charts menu to show some.
-            </div>
-          )}
+        <div className="g-list">
+          {sections.map((sec) => {
+            const rows = signals.filter((s) => s.section === sec);
+            if (!rows.length) return null;
+            return (
+              <section key={sec} className="g-sec">
+                <h2>{sec}</h2>
+                {rows.map((s) => [signalRow(s), s.id === 'total' && log.channelCount ? channelsGroup() : null])}
+              </section>
+            );
+          })}
         </div>
         {settings.eventsPanelOpen && parsed.events && <EventsPanel ctx={ctx} />}
       </div>
@@ -353,31 +598,23 @@ export function Graphs({
   );
 }
 
-function ChannelPicker({ ctx, channels, setChannels }: { ctx: ViewCtx; channels: number[]; setChannels: (c: number[]) => void }) {
-  const log = ctx.parsed.log!;
-  const toggle = (ch: number) =>
-    setChannels(channels.includes(ch) ? channels.filter((c) => c !== ch) : [...channels, ch].sort((a, b) => a - b));
+function hasWifi(log: DSLog) {
+  for (let i = 0; i < log.count; i++) if (log.wifiDb[i] > 0 || log.wifiMb[i] > 0) return true;
+  return false;
+}
+
+function Chevron({ open }: { open: boolean }) {
   return (
-    <div className="row" style={{ gap: 5, margin: '4px 0 8px' }}>
-      {log.currents.map((_, ch) => (
-        <button
-          key={ch}
-          className={`chip ${channels.includes(ch) ? 'on' : ''}`}
-          style={{ ['--chip-color' as string]: channelColor(ch, ctx.theme.dark), height: 24, padding: '0 8px' }}
-          onClick={() => toggle(ch)}
-          title={channelName(ctx.labels, ch)}
-        >
-          <span className="dot" />
-          {ctx.labels?.[ch]?.trim() ? channelName(ctx.labels, ch) : ch}
-        </button>
-      ))}
-      <button className="btn small ghost" onClick={() => setChannels(defaultChannels(log))}>
-        Top 6
-      </button>
-      <button className="btn small ghost" onClick={() => setChannels([])}>
-        Clear
-      </button>
-    </div>
+    <svg
+      className="g-chev"
+      width="10"
+      height="10"
+      viewBox="0 0 10 10"
+      style={{ transform: open ? 'rotate(90deg)' : undefined }}
+      aria-hidden="true"
+    >
+      <path d="M3 1.5 6.8 5 3 8.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   );
 }
 
@@ -458,7 +695,11 @@ function EventsPanel({ ctx }: { ctx: ViewCtx }) {
             <button
               key={k}
               className={`chip ${kinds.has(k) ? 'on' : ''}`}
-              style={{ ['--chip-color' as string]: `var(--${k === 'error' ? 'bad' : k === 'warning' ? 'warn' : k === 'print' ? 'faint' : k === 'ds' ? 'info' : 'test'})`, height: 24, padding: '0 8px' }}
+              style={{
+                ['--chip-color' as string]: `var(--${k === 'error' ? 'bad' : k === 'warning' ? 'warn' : k === 'print' ? 'faint' : k === 'ds' ? 'info' : 'test'})`,
+                height: 24,
+                padding: '0 8px',
+              }}
               onClick={() => toggle(k)}
             >
               <span className="dot" />

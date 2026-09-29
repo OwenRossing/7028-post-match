@@ -4,15 +4,20 @@ import { Icon } from './Icon';
 
 const SHORTCUTS: [string, string][] = [
   ['L', 'Open the latest match'],
-  ['1 – 4', 'Summary · Graphs · Power · Details'],
-  ['Esc', 'Back to Summary'],
-  ['← → ↑ ↓', 'Summary: move around the robot map'],
-  ['Enter', 'Summary: show that part on the graphs'],
-  ['Space', 'Summary: mark a part as checked'],
+  ['1 – 4', 'Board · Graphs · Messages · Info'],
+  ['Esc', 'Close the details, or back to the Board'],
+  ['↑ ↓  Space', 'Every page: move between rows, fold or unfold one'],
+  ['E', 'Fold or unfold everything (on the Board: the column)'],
+  ['← →', 'Board: move between columns'],
+  ['Enter', 'Board: details for that row (Enter again: graphs)'],
+  ['J  K', 'Board: next / previous unusual row'],
+  ['X', 'Board: mark a row as checked'],
+  ['G  M', 'Board: that row on the graphs / in the messages'],
   ['A  T  M  F', 'Graphs: zoom to auto / teleop / match / all'],
   ['+  −   ← →', 'Graphs: zoom and pan'],
-  ['J  K', 'Previous / next problem'],
-  ['/', 'Details: search the messages'],
+  ['N', 'Graphs: name the selected power channel'],
+  ['/', 'Messages: search'],
+  ['G', 'Messages: show the selected message on the graphs'],
   ['[  ]', 'Previous / next log'],
   ['O', 'Open log files'],
   ['S', 'Your logs'],
@@ -21,6 +26,7 @@ const SHORTCUTS: [string, string][] = [
 ];
 
 const GLOSSARY: [string, string][] = [
+  ['Red on the Board', 'That number is 2+ standard deviations from what this robot did in its last 15 matches, on the side that is worse. It needs 5 earlier matches before it judges anything. Amber means one of the built-in checks (below) fired.'],
   ['Battery voltage', 'Measured by the roboRIO. A fresh battery rests around 12.8–13.2 V. Heavy driving pulls it down; below ~6.8 V the roboRIO browns out.'],
   ['Brownout', 'The roboRIO turns off motor outputs to protect itself when voltage gets too low. The robot suddenly goes limp for a moment.'],
   ['Trip time', 'How long a packet takes to go DS → robot → DS. A few milliseconds is normal; spikes mean network trouble.'],

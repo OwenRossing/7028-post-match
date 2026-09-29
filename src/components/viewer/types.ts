@@ -8,7 +8,16 @@ import type { ChartTheme } from '../../lib/theme';
 import type { TimeFormat } from '../../lib/timefmt';
 import type { ParsedLog } from '../../lib/workerClient';
 
-export type Tab = 'overview' | 'graphs' | 'power' | 'details';
+export type Tab = 'board' | 'graphs' | 'messages' | 'info';
+
+export interface JumpOpts {
+  /** Unfold the Graphs rows for one of the analysis charts. */
+  chart?: ChartId;
+  /** Unfold one Graphs row by id ('voltage', 'total', 'ch3', …). */
+  signal?: string;
+  /** Seconds to show around the time. */
+  width?: number;
+}
 
 export interface EventFilter {
   tag?: string;
@@ -27,8 +36,8 @@ export interface ViewCtx {
   labelKey: string;
   /** Findings for the enabled part of the log (includes info-level notes). */
   problems: Problem[];
-  /** Switches to the graphs tab and focuses a time. */
-  jumpTo: (t: number, opts?: { chart?: ChartId; width?: number }) => void;
+  /** Switches to the graphs tab, focuses a time and unfolds the rows that show it. */
+  jumpTo: (t: number, opts?: JumpOpts) => void;
   showEvents: (filter: EventFilter) => void;
   setTab: (tab: Tab) => void;
 }

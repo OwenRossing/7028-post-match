@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { DSEvent, EventKind } from '../../lib/dsevents';
 import { download, eventsToCsv, safeFileName } from '../../lib/export';
 import { Icon } from '../Icon';
@@ -67,6 +67,8 @@ export function EventsView({ ctx, initial }: { ctx: ViewCtx; initial: EventFilte
   const [open, setOpen] = useState<number | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [limit, setLimit] = useState(300);
+  const [sel, setSel] = useState(0);
+  const tableRef = useRef<HTMLTableElement>(null);
   const range = useGroupValue(group, 'range', () => group.range);
   const zoomed = useMemo(() => group.isZoomedFrom(parsed.analysis.focus), [group, range, parsed.analysis.focus]);
 
@@ -83,6 +85,7 @@ export function EventsView({ ctx, initial }: { ctx: ViewCtx; initial: EventFilte
     setQ(initial.text ?? '');
     setScope('all');
     setOpen(null);
+    setSel(0);
   }, [initial]);
 
   const needle = q.trim().toLowerCase();
@@ -125,6 +128,53 @@ export function EventsView({ ctx, initial }: { ctx: ViewCtx; initial: EventFilte
   }, [base, kinds, grouped]);
 
   const problemsOnly = kinds.size === 2 && kinds.has('error') && kinds.has('warning');
+  const cur = Math.min(sel, Math.max(0, Math.min(rows.length, limit) - 1));
+
+  useEffect(() => {
+    tableRef.current?.querySelector('.ev-row.sel')?.scrollIntoView({ block: 'nearest' });
+  }, [cur, open]);
+
+  // ↑ ↓ pick a message, Enter/Space opens it, G shows it on the graphs.
+  const onKey = useRef<(e: KeyboardEvent) => void>(() => undefined);
+  onKey.current = (e: KeyboardEvent) => {
+    const el = e.target as HTMLElement | null;
+    if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+    if (e.ctrlKey || e.metaKey || e.altKey || document.querySelector('.modal-back') || !rows.length) return;
+    const r = rows[cur];
+    let handled = true;
+    switch (e.key) {
+      case 'ArrowDown':
+        setSel(Math.min(Math.min(rows.length, limit) - 1, cur + 1));
+        break;
+      case 'ArrowUp':
+        setSel(Math.max(0, cur - 1));
+        break;
+      case 'Home':
+        setSel(0);
+        break;
+      case 'End':
+        setSel(Math.min(rows.length, limit) - 1);
+        break;
+      case 'Enter':
+      case ' ':
+        setOpen(open === r.first.id ? null : r.first.id);
+        break;
+      case 'g':
+        if (parsed.log) ctx.jumpTo(r.first.t, { width: 12 });
+        break;
+      default:
+        handled = false;
+    }
+    if (handled) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    }
+  };
+  useEffect(() => {
+    const f = (e: KeyboardEvent) => onKey.current(e);
+    window.addEventListener('keydown', f, true);
+    return () => window.removeEventListener('keydown', f, true);
+  }, []);
 
   const toggleKind = (k: EventKind) =>
     setKinds((prev) => {
@@ -169,6 +219,14 @@ export function EventsView({ ctx, initial }: { ctx: ViewCtx; initial: EventFilte
             onChange={(e) => {
               setQ(e.target.value);
               setLimit(300);
+              setSel(0);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === 'Escape') {
+                e.preventDefault();
+                e.stopPropagation();
+                (e.target as HTMLInputElement).blur();
+              }
             }}
           />
         </div>
@@ -235,15 +293,21 @@ export function EventsView({ ctx, initial }: { ctx: ViewCtx; initial: EventFilte
       )}
 
       <div className="card" style={{ overflow: 'hidden' }}>
-        <table className="ev-table">
+        <table className="ev-table" ref={tableRef}>
           <tbody>
-            {rows.slice(0, limit).map((r) => {
+            {rows.slice(0, limit).map((r, i) => {
               const e = r.first;
               const isOpen = open === e.id;
               const [firstLine, ...rest] = e.text.split('\n');
               return (
                 <Fragment key={e.id}>
-                  <tr className={`ev-row ${isOpen ? 'open' : ''}`} onClick={() => setOpen(isOpen ? null : e.id)}>
+                  <tr
+                    className={`ev-row ${isOpen ? 'open' : ''} ${i === cur ? 'sel' : ''}`}
+                    onClick={() => {
+                      setSel(i);
+                      setOpen(isOpen ? null : e.id);
+                    }}
+                  >
                     <td className="c-time">{tf.fmt(e.t)}</td>
                     <td className="c-kind">
                       <span className={`badge ${e.kind === 'error' ? 'bad' : e.kind === 'warning' ? 'warn' : e.kind === 'ds' ? 'info' : ''}`}>

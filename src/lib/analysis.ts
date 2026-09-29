@@ -773,11 +773,16 @@ export interface LogSummary {
   problemCount: number;
   hasDslog: boolean;
   hasEvents: boolean;
+  /** Board numbers, for judging later matches against this one (see board.ts). */
+  metrics?: Record<string, number>;
 }
 
-export function summarize(log: DSLog | null, file: DSEventsFile | null): LogSummary {
-  const analysis = analyze(log, file);
-  const stats = computeStats(log, file, analysis, analysis.focus);
+export function summarize(
+  log: DSLog | null,
+  file: DSEventsFile | null,
+  analysis = analyze(log, file),
+  stats = computeStats(log, file, analysis, analysis.focus),
+): LogSummary {
   const problems = findProblems(log, file, analysis, stats);
   const fms = file?.meta.fms;
   return {

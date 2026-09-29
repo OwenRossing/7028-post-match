@@ -45,6 +45,8 @@ interface SavedMeta {
 const POLL_MS = 2000;
 const LIVE_SUMMARY_MIN_MS = 10000;
 const SAMPLE_NAME = '2026_05_16 11_38_21 Sat';
+/** Bump when LogSummary gains fields, so cached summaries are recomputed. */
+const SUMMARY_VERSION = 2;
 
 function savedRef(meta: SavedMeta): FileRef {
   return {
@@ -348,12 +350,13 @@ export function useLibrary(opts: { onNewLog: (e: LogEntry) => void; onError: (ti
       let summary: LogSummary | undefined;
       let error: string | undefined;
       const cacheable = next.source !== 'sample' && next.source !== 'upload';
+      const cacheKey = `${vkey}#${SUMMARY_VERSION}`;
       try {
-        summary = cacheable ? await idb.get<LogSummary>('summaries', vkey) : undefined;
+        summary = cacheable ? await idb.get<LogSummary>('summaries', cacheKey) : undefined;
         if (!summary) {
           const [a, b] = await Promise.all([next.dslog?.read(), next.dsevents?.read()]);
           summary = await summarizeLog(a, b);
-          if (cacheable) await idb.set('summaries', vkey, summary).catch(() => undefined);
+          if (cacheable) await idb.set('summaries', cacheKey, summary).catch(() => undefined);
         }
       } catch (err) {
         error = String((err as Error).message ?? err);

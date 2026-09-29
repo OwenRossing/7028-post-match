@@ -1,5 +1,4 @@
 import { useSyncExternalStore } from 'react';
-import type { ChartId } from './analysis';
 import type { ThemePref } from './theme';
 
 export type TimeMode = 'match' | 'log' | 'clock';
@@ -8,7 +7,6 @@ export interface Settings {
   theme: ThemePref;
   timeMode: TimeMode;
   showMarkers: boolean;
-  hiddenCharts: ChartId[];
   /** Custom channel names, keyed by "<team>:<pd type>". */
   channelLabels: Record<string, string[]>;
   persistUploads: boolean;
@@ -23,7 +21,6 @@ const DEFAULTS: Settings = {
   theme: 'system',
   timeMode: 'match',
   showMarkers: true,
-  hiddenCharts: [],
   channelLabels: {},
   persistUploads: true,
   autoFollow: true,

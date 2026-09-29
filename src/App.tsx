@@ -31,7 +31,7 @@ export default function App() {
   const settings = useSettings();
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const [tab, setTab] = useState<Tab>('overview');
+  const [tab, setTab] = useState<Tab>('board');
   const [view, setView] = useState<'main' | 'compare'>('main');
   const [compareSelecting, setCompareSelecting] = useState(false);
   const [compareKeys, setCompareKeys] = useState<string[]>([]);
@@ -75,10 +75,10 @@ export default function App() {
   const onNewLog = useCallback(
     (e: LogEntry) => {
       if (settings.autoFollow) {
-        openKey(e.key, 'overview');
+        openKey(e.key, 'board');
         toast('New log from the Driver Station', `Opened ${e.key}. It updates live while the DS is recording.`, 'success');
       } else {
-        toast('New log from the Driver Station', e.key, 'info', { label: 'Open', run: () => openKey(e.key, 'overview') });
+        toast('New log from the Driver Station', e.key, 'info', { label: 'Open', run: () => openKey(e.key, 'board') });
       }
     },
     [settings.autoFollow, openKey, toast],
@@ -97,7 +97,7 @@ export default function App() {
       }
       const added = await library.addFiles(logs);
       const newest = [...added].sort((a, b) => b.startTime - a.startTime)[0];
-      if (newest) openKey(newest.key, 'overview');
+      if (newest) openKey(newest.key, 'board');
       if (added.length > 1) toast(`Added ${added.length} logs`, 'They are listed in the library on the left.', 'success');
       const unpaired = added.filter((e) => !e.dslog || !e.dsevents);
       if (added.length === 1 && unpaired.length === 1)
@@ -111,13 +111,13 @@ export default function App() {
 
   const openLatestMatch = useCallback(() => {
     const m = entries.find((e) => e.summary?.isMatch) ?? entries.find((e) => e.summary?.enabledTime) ?? entries[0];
-    if (m) openKey(m.key, 'overview');
+    if (m) openKey(m.key, 'board');
     else toast('No logs yet', 'Open some logs or connect the DS folder first.');
   }, [entries, openKey, toast]);
 
   const openSample = useCallback(async () => {
     const e = await library.loadSample();
-    if (e) openKey(e.key, 'overview');
+    if (e) openKey(e.key, 'board');
   }, [library, openKey]);
 
   // ---------- Drag & drop anywhere ----------
@@ -195,6 +195,17 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, [entries, selectedKey, openKey, openLatestMatch]);
 
+  // On the DS laptop, start on the newest match instead of the home screen.
+  const autoOpened = useRef(false);
+  useEffect(() => {
+    if (autoOpened.current || !settings.autoFollow || selectedKey || !library.ready) return;
+    if (library.folder.status !== 'connected' && library.companion.status !== 'connected') return;
+    const newest = entries.find((e) => e.summary?.isMatch);
+    if (!newest) return;
+    autoOpened.current = true;
+    openKey(newest.key, 'board');
+  }, [settings.autoFollow, selectedKey, library.ready, library.folder.status, library.companion.status, entries, openKey]);
+
   // Drop a selection that disappeared (e.g. folder disconnected).
   useEffect(() => {
     if (selectedKey && library.ready && !library.entries.has(selectedKey)) setSelectedKey(null);
@@ -262,7 +273,7 @@ export default function App() {
             <Compare
               entries={compareEntries}
               theme={chartTheme}
-              onOpen={(k) => openKey(k, 'overview')}
+              onOpen={(k) => openKey(k, 'board')}
               onRemove={(k) => {
                 const next = compareKeys.filter((x) => x !== k);
                 setCompareKeys(next);
@@ -278,6 +289,7 @@ export default function App() {
               key={selected.key}
               entry={selected}
               state={parsed}
+              entries={entries}
               theme={chartTheme}
               settings={settings}
               tab={tab}
@@ -304,7 +316,7 @@ export default function App() {
               library={library}
               recent={entries}
               onOpenFiles={() => fileInput.current?.click()}
-              onOpen={(k) => openKey(k, 'overview')}
+              onOpen={(k) => openKey(k, 'board')}
               onSample={openSample}
               onLatestMatch={openLatestMatch}
             />
