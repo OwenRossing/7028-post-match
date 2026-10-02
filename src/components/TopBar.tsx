@@ -51,15 +51,18 @@ export function TopBar({ library, settings, onOpenFiles, onLatestMatch, onHelp, 
           Reconnect DS folder
         </button>
       )}
-      {hasMatches && (
+      {/* The home screen has its own buttons for these; only show them while a log is open. */}
+      {viewing && hasMatches && (
         <button className="btn pill primary latest-btn" onClick={onLatestMatch} title="Open the most recent match (L)">
           <span className="hide-xs">Latest match</span>
           <span className="show-xs">Latest</span>
         </button>
       )}
-      <button className={`btn pill ${hasMatches ? '' : 'primary'}`} onClick={onOpenFiles} title="Open .dslog / .dsevents files (O)">
-        Open
-      </button>
+      {viewing && (
+        <button className="btn pill" onClick={onOpenFiles} title="Open .dslog / .dsevents files (O)">
+          Open
+        </button>
+      )}
 
       <div className="menu-wrap">
         <button className="btn icon round" onClick={() => setMenu((m) => !m)} title="Driver Station folder, theme, help" aria-label="Menu">

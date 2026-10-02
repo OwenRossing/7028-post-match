@@ -7,6 +7,7 @@ import { TopBar } from './components/TopBar';
 import { Viewer } from './components/Viewer';
 import type { Tab } from './components/viewer/types';
 import { Welcome } from './components/Welcome';
+import { classifyHistory, usesDemoHistory } from './lib/baseline';
 import { filesFromDrop } from './lib/folder';
 import { isLogFile, sortEntries, type LogEntry } from './lib/library';
 import { updateSettings, useSettings } from './lib/settings';
@@ -87,6 +88,14 @@ export default function App() {
   const entries = useMemo(() => sortEntries(library.entries.values()), [library.entries]);
   const selected = selectedKey ? library.entries.get(selectedKey) : undefined;
   const parsed = useParsed(view === 'main' ? selected : undefined);
+
+  // Which logs the open match is compared against. The Board uses the same function, so this is the real list.
+  const baseline = useMemo(() => {
+    if (!selected || view !== 'main') return null;
+    const team = selected.summary?.team ?? (parsed.key === selected.key ? parsed.data?.events?.meta.team : undefined);
+    const { points, status } = classifyHistory(entries, { key: selected.key, startTime: selected.startTime, team });
+    return { title: selected.summary?.title ?? selected.key, demo: usesDemoHistory(selected, points.length), status };
+  }, [entries, selected, view, parsed.key, parsed.data]);
 
   const addFiles = useCallback(
     async (files: File[]) => {
@@ -241,14 +250,13 @@ export default function App() {
         {mobileSidebar && <div className="drawer-scrim" onClick={() => setMobileSidebar(false)} />}
         <LibraryPanel
           entries={entries}
+          baseline={baseline}
           selectedKey={view === 'main' ? selectedKey : null}
           onSelect={(k) => openKey(k)}
           indexing={library.indexing}
           compareSelecting={compareSelecting}
           compareKeys={compareKeys}
-          toggleCompare={(k) =>
-            setCompareKeys((ks) => (ks.includes(k) ? ks.filter((x) => x !== k) : ks.length >= 6 ? ks : [...ks, k]))
-          }
+          toggleCompare={(k) => setCompareKeys((ks) => (ks.includes(k) ? ks.filter((x) => x !== k) : ks.length >= 6 ? ks : [...ks, k]))}
           beginCompare={() => {
             setCompareSelecting(true);
             setCompareKeys(selectedKey ? [selectedKey] : []);

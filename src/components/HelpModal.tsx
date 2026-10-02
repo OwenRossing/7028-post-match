@@ -11,6 +11,7 @@ const SHORTCUTS: [string, string][] = [
   ['← →', 'Board: move between columns'],
   ['Enter', 'Board: details for that row (Enter again: graphs)'],
   ['J  K', 'Board: next / previous unusual row'],
+  ['I', 'Board: explain the selected row (or click its info button)'],
   ['X', 'Board: mark a row as checked'],
   ['G  M', 'Board: that row on the graphs / in the messages'],
   ['A  T  M  F', 'Graphs: zoom to auto / teleop / match / all'],

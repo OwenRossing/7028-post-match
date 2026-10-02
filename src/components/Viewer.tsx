@@ -401,7 +401,7 @@ function LoadedViewer({
       <KeyBar
         keys={
           tab === 'board'
-            ? [['← → ↑ ↓', 'move'], ['Space', 'unfold'], ['Enter', 'details'], ['J K', 'unusual'], ['X', 'checked'], ['G M', 'graphs · messages']]
+            ? [['← → ↑ ↓', 'move'], ['Space', 'unfold'], ['Enter', 'details'], ['I', 'explain'], ['J K', 'unusual']]
             : tab === 'graphs'
               ? [['↑ ↓', 'rows'], ['Space', 'unfold'], ['← →', 'pan'], ['+ −', 'zoom'], ['A T M F', 'auto · teleop · match · all'], ['Esc', 'board']]
               : tab === 'messages'

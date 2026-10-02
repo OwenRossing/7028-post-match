@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PitView board · A · Instrument</title>
+<style>
+  /* A · Instrument: dense dark tool. Hairlines instead of cards, square corners, mono numbers, one accent, rewards that are quick and small. */
+  :root {
+    --bg: #0b0c0e; --p: #111215; --p2: #16181c; --l: #22252a; --l2: #30343a;
+    --t: #d9dbde; --m: #8a9097; --f: #565b62;
+    --red: #ff5252; --redbg: rgba(255, 82, 82, 0.1); --good: #38d996; --acc: #5ca7ff; --amber: #f2b24a;
+    --mono: ui-monospace, 'Cascadia Mono', 'SF Mono', Consolas, monospace;
+    --sans: -apple-system, 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--t); font: 12px/1.35 var(--sans); overflow: hidden; }
+  button { font: inherit; color: inherit; }
+  kbd { font: 10px var(--mono); padding: 0 4px; border: 1px solid var(--l2); border-bottom-width: 2px; border-radius: 2px; color: var(--m); background: var(--p2); }
+  .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  #app { height: 100%; display: grid; grid-template-rows: 34px auto 1fr 24px; }
+
+  /* top bar */
+  .top { display: flex; align-items: center; gap: 14px; padding: 0 12px; border-bottom: 1px solid var(--l); background: var(--p); }
+  .logo { width: 18px; height: 18px; background: var(--acc); color: #04101f; font: 800 10px/18px var(--mono); text-align: center; border-radius: 2px; }
+  .top h1 { margin: 0; font-size: 13px; font-weight: 650; }
+  .top .meta { color: var(--m); }
+  .tabs { display: flex; margin-left: auto; height: 100%; }
+  .tabs a { display: flex; align-items: center; gap: 6px; padding: 0 12px; color: var(--m); border-bottom: 2px solid transparent; cursor: default; }
+  .tabs a.on { color: var(--t); border-color: var(--acc); }
+
+  /* summary strip */
+  .sum { display: grid; grid-template-columns: auto 1fr auto; gap: 18px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--l); }
+  .score { display: flex; align-items: baseline; gap: 8px; min-width: 180px; }
+  .score b { font: 600 22px/1 var(--mono); color: var(--red); }
+  .score.clear b { color: var(--good); }
+  .score span { color: var(--m); }
+  .score.pop b { animation: pop 0.35s cubic-bezier(0.2, 1.6, 0.4, 1); }
+  @keyframes pop { 40% { transform: scale(1.35); } }
+  .segs { display: flex; gap: 2px; margin-top: 4px; }
+  .segs i { width: 14px; height: 3px; background: var(--l2); }
+  .segs i.done { background: var(--good); }
+  .segs i.open { background: var(--red); }
+  .tl { position: relative; height: 14px; background: var(--p2); border: 1px solid var(--l); }
+  .tl i { position: absolute; top: 0; bottom: 0; }
+  .tl .auto { background: rgba(242, 178, 74, 0.45); } .tl .teleop { background: rgba(92, 167, 255, 0.32); }
+  .tl .nc { background: repeating-linear-gradient(135deg, var(--f) 0 2px, transparent 2px 4px); }
+  .tl .rail { width: 2px; background: var(--red); top: -3px; bottom: -3px; }
+  .tl .mk { width: 2px; background: #fff; top: -3px; bottom: -3px; box-shadow: 0 0 0 2px rgba(255,255,255,.15); }
+  .tll { display: flex; justify-content: space-between; color: var(--f); font: 9px var(--mono); margin-top: 2px; text-transform: uppercase; letter-spacing: 0.08em; }
+  .base { color: var(--m); text-align: right; white-space: nowrap; }
+  .base b { color: var(--t); font-weight: 600; }
+
+  /* columns */
+  .cols { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); min-height: 0; }
+  .col { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--l); container-type: inline-size; }
+  @container (max-width: 300px) { .r { grid-template-columns: 14px minmax(0, 1fr) auto 56px; } .sk { display: none; } .dl { display: none; } }
+  .col:last-child { border-right: 0; }
+  .ch { display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 10px; border-bottom: 1px solid var(--l); background: var(--p); color: var(--m); font-size: 10px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; }
+  .col.act .ch { color: var(--t); box-shadow: inset 0 -2px 0 var(--acc); }
+  .ch .n { margin-left: auto; font: 700 10px var(--mono); padding: 0 5px; background: var(--red); color: #1a0505; border-radius: 2px; }
+  .ch .ok { margin-left: auto; width: 6px; height: 6px; background: var(--good); border-radius: 50%; }
+  .cb { flex: 1; overflow: auto; padding: 2px 0 20px; scrollbar-width: thin; scrollbar-color: var(--l2) transparent; }
+  .r { position: relative; display: grid; grid-template-columns: 14px minmax(0, 1fr) auto 66px 64px; align-items: center; gap: 6px; height: 24px; padding: 0 10px 0 8px; cursor: default; border-left: 2px solid transparent; }
+  .r.d1 { padding-left: 20px; height: 22px; color: var(--m); } .r.d2 { padding-left: 32px; height: 22px; color: var(--m); }
+  .r:hover { background: var(--p2); }
+  .r.bad { background: var(--redbg); border-left-color: var(--red); }
+  .r.chk { border-left-color: var(--good); color: var(--m); }
+  .r.chk .v { color: var(--good); } .r.chk .nm { text-decoration: line-through; text-decoration-color: var(--good); }
+  .r.sel { background: rgba(92, 167, 255, 0.13); box-shadow: inset 0 0 0 1px var(--acc); animation: flash 0.4s ease-out; }
+  @keyframes flash { from { background: rgba(92, 167, 255, 0.4); } }
+  .chev { color: var(--f); font-size: 9px; transition: transform 0.12s; text-align: center; }
+  .chev.o { transform: rotate(90deg); }
+  .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .r.d0 .nm { font-weight: 560; }
+  .nm small { color: var(--f); margin-left: 6px; font-size: 10.5px; }
+  .dl { color: var(--red); font: 10px var(--mono); white-space: nowrap; }
+  .v { text-align: right; font: 600 12px var(--mono); }
+  .v small { color: var(--f); font-weight: 400; margin-left: 2px; }
+  .bad .v { color: var(--red); }
+  .bd { font: 700 9px var(--mono); background: var(--red); color: #1a0505; padding: 0 4px; border-radius: 2px; }
+  .spark { display: block; }
+  .sp-band { fill: rgba(56, 217, 150, 0.1); } .sp-line { fill: none; stroke: var(--f); stroke-width: 1; }
+  .sp-dot.ok { fill: var(--good); } .sp-dot.bad { fill: var(--red); }
+  .first .sp-line { stroke-dasharray: 200; stroke-dashoffset: 200; animation: draw 0.8s 0.15s ease-out forwards; }
+  @keyframes draw { to { stroke-dashoffset: 0; } }
+  .first .r { animation: rise 0.35s ease-out backwards; }
+  @keyframes rise { from { opacity: 0; transform: translateY(3px); } }
+  .empty { padding: 10px; color: var(--f); }
+  .empty code { display: block; margin-top: 6px; padding: 6px; background: var(--p2); border: 1px solid var(--l); font: 10.5px var(--mono); color: var(--m); white-space: pre-wrap; }
+
+  /* inspector */
+  .insp { position: fixed; top: 34px; right: 0; bottom: 24px; width: 360px; background: var(--p); border-left: 1px solid var(--l2); display: flex; flex-direction: column; animation: slide 0.16s ease-out; z-index: 5; }
+  @keyframes slide { from { transform: translateX(16px); opacity: 0; } }
+  .ih { padding: 10px 14px; border-bottom: 1px solid var(--l); }
+  .crumb { color: var(--f); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; }
+  .ih h2 { margin: 2px 0 0; font-size: 14px; }
+  .big { display: flex; align-items: baseline; gap: 8px; margin-top: 6px; }
+  .big b { font: 600 26px/1 var(--mono); } .big b.bad { color: var(--red); } .big span { color: var(--m); }
+  .chip { font: 10px var(--mono); padding: 1px 6px; border-radius: 2px; background: var(--redbg); color: var(--red); border: 1px solid rgba(255,82,82,.35); }
+  .chip.ok { background: rgba(56,217,150,.1); color: var(--good); border-color: rgba(56,217,150,.35); }
+  .ib { overflow: auto; flex: 1; }
+  .sec { padding: 10px 14px; border-bottom: 1px solid var(--l); }
+  .sec h3 { margin: 0 0 6px; color: var(--f); font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; display: flex; justify-content: space-between; }
+  .sec p { margin: 0; color: var(--m); }
+  .bars { display: flex; align-items: flex-end; gap: 2px; height: 64px; position: relative; }
+  .bars i { flex: 1; background: var(--l2); min-height: 2px; }
+  .bars i.now { background: var(--good); } .bars i.now.bad { background: var(--red); }
+  .bars .band { position: absolute; left: 0; right: 0; background: rgba(56,217,150,.09); border-top: 1px dashed rgba(56,217,150,.35); border-bottom: 1px dashed rgba(56,217,150,.35); pointer-events: none; }
+  .chart { display: block; width: 100%; height: 80px; background: var(--p2); border: 1px solid var(--l); }
+  .ch-line { fill: none; stroke: var(--acc); stroke-width: 1.2; vector-effect: non-scaling-stroke; }
+  .ch-auto { fill: rgba(242,178,74,.12); } .ch-teleop { fill: rgba(92,167,255,.06); }
+  .ch-mark { stroke: var(--red); stroke-width: 1; vector-effect: non-scaling-stroke; opacity: 0.8; }
+  .il { display: grid; grid-template-columns: 56px 1fr auto; gap: 8px; padding: 2px 0; font: 11px var(--mono); color: var(--m); }
+  .il b { color: var(--t); font-weight: 500; }
+
+  /* status bar */
+  .st { display: flex; align-items: center; gap: 16px; padding: 0 12px; border-top: 1px solid var(--l); background: var(--p); color: var(--m); font-size: 11px; }
+  .st span { display: inline-flex; gap: 5px; align-items: center; }
+  .st .sp { margin-left: auto; }
+  .clearbadge { color: var(--good); font-weight: 650; animation: pop 0.5s cubic-bezier(0.2, 1.6, 0.4, 1); }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script src="board-data.js"></script>
+<script src="board-core.js"></script>
+<script>
+  const { D, fmt, spark, delta, chart, t } = PV;
+  const COLORS = { auto: 'auto', teleop: 'teleop' };
+
+  function tl() {
+    const [a, b] = D.range, span = b - a, p = (x) => (((x - a) / span) * 100).toFixed(2);
+    const modes = D.modes.map((m) => `<i class="${COLORS[m.mode]}" style="left:${p(m.start)}%;width:${p(m.end) - p(m.start)}%"></i>`).join('');
+    const nc = D.noComms.filter(([s, e]) => e > a && s < b).map(([s, e]) => `<i class="nc" style="left:${p(Math.max(s, a))}%;width:${Math.max(0.3, p(Math.min(e, b)) - p(Math.max(s, a)))}%"></i>`).join('');
+    const rail = D.rail12.map((x) => `<i class="rail" style="left:${p(x)}%"></i>`).join('');
+    return `<div><div class="tl">${modes}${nc}${rail}</div><div class="tll"><span>auto</span><span>teleop</span><span>${t(b)}</span></div></div>`;
+  }
+
+  function row(c) {
+    const r = c.row, j = r.j;
+    const cls = ['r', 'd' + Math.min(c.depth, 2), c.checked ? 'chk' : c.red ? 'bad' : '', c.sel ? 'sel' : ''].join(' ');
+    return `<div class="${cls}" data-cell="${r.id}">
+      <span class="chev ${c.open ? 'o' : ''}">${c.kids ? '▶' : ''}</span>
+      <span class="nm">${r.label}${r.sub && c.depth ? `<small>${r.sub}</small>` : ''}${c.red ? `<small class="dl">${delta(r)}</small>` : ''}</span>
+      ${!c.open && c.hidden ? `<span class="bd">${c.hidden}</span>` : '<span></span>'}
+      <span class="sk">${spark(r)}</span>
+      <span class="v">${r.value == null ? '' : fmt(r.value, r.digits)}<small>${r.unit || ''}</small></span>
+    </div>`;
+  }
+
+  function inspector(m) {
+    const c = m.cur, r = c.row, j = r.j;
+    const path = '';
+    const bars = () => {
+      if (!j || !j.enough) return '<p>Not enough earlier matches to compare.</p>';
+      const v = [...j.history, r.value], hi = Math.max(...v, j.mean + 2 * j.spread) * 1.05, lo = Math.min(0, ...v);
+      const h = (x) => ((x - lo) / (hi - lo)) * 100;
+      return `<div class="bars"><i class="band" style="bottom:${h(Math.max(lo, j.mean - 2 * j.spread))}%;height:${h(j.mean + 2 * j.spread) - h(Math.max(lo, j.mean - 2 * j.spread))}%"></i>${v.map((x, i) => `<i class="${i === v.length - 1 ? 'now ' + (j.flagged ? 'bad' : '') : ''}" style="height:${Math.max(2, h(x))}%" title="${i < j.labels.length ? j.labels[i] : 'This match'}: ${fmt(x, r.digits)}"></i>`).join('')}</div>`;
+    };
+    const ins = (r.instances || []).filter((x) => x.t != null).slice(0, 8);
+    const sig = r.trace && (D.series[r.trace.signal] ? r.trace.signal : r.trace.signal === 'channel' ? 'total' : null);
+    return `<aside class="insp" data-keep>
+      <div class="ih"><div class="crumb">${D.columns[c.col].title}</div><h2>${r.label}</h2>
+        ${r.value == null ? '' : `<div class="big"><b class="${c.red ? 'bad' : ''}">${fmt(r.value, r.digits)}</b><span>${r.unit || ''}</span>${j && j.enough ? (j.flagged ? `<span class="chip">${delta(r)}</span>` : '<span class="chip ok">normal</span>') : ''}</div>`}
+      </div>
+      <div class="ib">
+        ${j ? `<div class="sec"><h3><span>vs last ${j.history.length} matches</span><span class="mono">usual ${fmt(Math.max(0, j.mean - 2 * j.spread), r.digits)}–${fmt(j.mean + 2 * j.spread, r.digits)}</span></h3>${bars()}</div>` : ''}
+        ${sig ? `<div class="sec"><h3><span>this match</span><span class="mono">${t(D.range[0])} → ${t(D.range[1])}</span></h3>${chart(sig, 330, 80, ins.map((x) => x.t))}</div>` : ''}
+        ${ins.length ? `<div class="sec"><h3><span>${r.instances.length} time${r.instances.length > 1 ? 's' : ''}</span></h3>${ins.map((x) => `<div class="il"><b>${t(x.t)}</b><span>${x.label || ''}</span><span>${x.value != null ? fmt(x.value, 2) : ''}</span></div>`).join('')}</div>` : ''}
+        ${r.hint ? `<div class="sec"><h3>what is this</h3><p>${r.hint}</p></div>` : ''}
+      </div></aside>`;
+  }
+
+  function render(m, root) {
+    const done = [...PV.S.checked].length, total = m.total;
+    const segs = Array.from({ length: total }, (_, i) => `<i class="${i < done ? 'done' : 'open'}"></i>`).join('');
+    root.innerHTML = `
+      <div class="top"><div class="logo">PV</div><h1>${D.title}</h1><span class="meta mono">${D.event} · team ${D.team} · ${new Date(D.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span>
+        <div class="tabs"><a class="on"><kbd>1</kbd> Board</a><a><kbd>2</kbd> Graphs</a><a><kbd>3</kbd> Messages</a><a><kbd>4</kbd> Info</a></div></div>
+      <div class="sum">
+        <div class="score ${m.flags.length ? '' : 'clear'}"><div><b id="score">${m.first ? 0 : m.flags.length}</b> <span>${m.flags.length ? 'unusual' : 'all clear'}</span><div class="segs">${segs}</div></div></div>
+        ${tl()}
+        <div class="base">vs last <b>${D.baseline.n}</b> matches <span style="color:var(--amber)">(demo)</span></div>
+      </div>
+      <div class="cols ${m.first ? 'first' : ''}">${m.columns.map((col, i) => `
+        <section class="col ${m.cur.col === i ? 'act' : ''}"><div class="ch">${col.title}${col.reds ? `<span class="n">${col.reds}</span>` : col.cells.length ? '<span class="ok"></span>' : ''}</div>
+        <div class="cb" data-scroll>${col.cells.length ? col.cells.map(row).join('') : col.id === 'performance' ? `<div class="empty">Your own numbers.<code>System.out.println("[pv] Flywheel/Spinup = " + secs + " s");</code></div>` : '<div class="empty">Nothing logged.</div>'}</div></section>`).join('')}
+      </div>
+      <div class="st"><span><kbd>↑↓←→</kbd> move</span><span><kbd>Space</kbd> unfold</span><span><kbd>Enter</kbd> details</span><span><kbd>J</kbd><kbd>K</kbd> unusual</span><span><kbd>X</kbd> check off</span>
+        <span class="sp">${done ? `${done} of ${total} checked` : ''} ${total && done === total ? '<span class="clearbadge">✓ ALL CLEAR</span>' : ''}</span></div>
+      ${m.inspect ? inspector(m) : ''}`;
+  }
+
+  PV.start({
+    render,
+    after(m, last, root) {
+      const el = document.getElementById('score');
+      if (m.first && el) PV.countUp(el, m.flags.length, 0, 650);
+      if (last && el && m.flags.length < last.reds) { el.parentElement.parentElement.classList.add('pop'); }
+    },
+  });
+</script>
+</body>
+</html>

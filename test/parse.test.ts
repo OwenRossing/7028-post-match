@@ -51,13 +51,18 @@ describe('sample log (MNST Qualification 22)', () => {
     const stats = computeStats(log, events, analysis, analysis.focus);
     const problems = findProblems(log, events, analysis, stats);
     const ids = problems.map((p) => p.id);
-    expect(ids).toContain('rail-v12');
+    // the nine 12 V rail dropouts are counted as brownouts, not as a separate rail fault
+    expect(ids).toContain('brownout');
+    expect(ids).not.toContain('rail-v12');
+    expect(stats.brownouts).toMatchObject({ count: 9, rail: 9, duration: 0 });
     expect(ids).toContain('loop');
     expect(ids).toContain('can-devices');
     expect(ids).toContain('comms-enabled');
-    expect(ids).toContain('code-stall');
     expect(ids).toContain('radio-fw');
-    expect(ids).not.toContain('brownout');
+    // 200+ single-packet gaps and the ones at auto/teleop changes are not a frozen program
+    expect(ids).not.toContain('code-stall');
+    expect(analysis.codeStalls.every((s) => s.end - s.start >= 0.1)).toBe(true);
+    expect(analysis.codeStalls.length).toBeLessThan(5);
     expect(analysis.loopCulprits.find((c) => !c.framework)?.name).toBe('IntakeSubsytem.periodic()');
   });
 
@@ -66,9 +71,9 @@ describe('sample log (MNST Qualification 22)', () => {
     const problems = findProblems(log, events, analysis, stats);
     const sev = problems.map((p) => p.severity);
     expect([...sev].sort((a, b) => ['bad', 'warn', 'info'].indexOf(a) - ['bad', 'warn', 'info'].indexOf(b))).toEqual(sev);
-    // losing the robot mid-match outranks a voltage dip that never became a brownout
-    expect(problems[0].id).toBe('comms-enabled');
-    expect(problems.findIndex((p) => p.id === 'rail-v12')).toBeLessThan(problems.findIndex((p) => p.id === 'volt-low'));
+    // brownouts come first; a lost-comms moment while enabled outranks a mere voltage dip
+    expect(problems[0].id).toBe('brownout');
+    expect(problems.findIndex((p) => p.id === 'comms-enabled')).toBeLessThan(problems.findIndex((p) => p.id === 'volt-low'));
     for (const p of problems.filter((x) => x.severity !== 'info')) {
       expect(p.fix, p.id).toBeTruthy();
       // advice lives in `fix`, not mixed into the description ('errors'/'crash' quote the robot's own message text)

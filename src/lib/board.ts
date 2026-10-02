@@ -2,7 +2,7 @@
 // Rows with a `better` direction are also saved per match (see boardMetrics) so later matches can be
 // compared against the robot's own history (see baseline.ts).
 
-import { computeStats, indexAt, modeOf, type Analysis, type Span, type Stats } from './analysis';
+import { computeStats, FRAMEWORK_EPOCH, indexAt, modeOf, railDropouts, type Analysis, type Span, type Stats } from './analysis';
 import type { DSLog } from './dslog';
 import { parseTracer, type DSEvent, type DSEventsFile, type EventKind } from './dsevents';
 
@@ -245,7 +245,7 @@ function powerColumn(log: DSLog | null, analysis: Analysis, stats: Stats, range:
         better: 'lower',
         noise: 60,
         trace: { kind: 'series', signal: 'total' },
-        hint: 'Charge drawn from the battery, per power distribution channel.',
+        hint: 'How much charge the robot pulled from the battery this match (mAh = milliamp-hours). Open it to see which power port used the most.',
         children: [...chans]
           .sort((a, b) => b.ah - a.ah)
           .map((c) => ({
@@ -271,7 +271,7 @@ function powerColumn(log: DSLog | null, analysis: Analysis, stats: Stats, range:
         better: 'lower',
         noise: 10,
         trace: { kind: 'series', signal: 'total' },
-        hint: 'Highest total current, and each channel’s own highest.',
+        hint: 'The most current the robot drew at one instant (amps), in total and for each power port. Big spikes drag the battery voltage down.',
         children: [...chans]
           .sort((a, b) => b.peak - a.peak)
           .map((c) => ({
@@ -301,7 +301,7 @@ function powerColumn(log: DSLog | null, analysis: Analysis, stats: Stats, range:
     noise: 0.15,
     problems: ['volt-low', 'volt-sag'],
     trace: { kind: 'series', signal: 'voltage', spans: 'brownouts', threshold: 7 },
-    hint: 'Lowest battery voltage. Brownouts start around 6.8 V.',
+    hint: 'The lowest the battery voltage got during the match. Healthy stays above about 8 V; around 6.8 V the robot browns out and motors cut off.',
     children: [
       {
         id: 'power.minVoltage.resting',
@@ -316,18 +316,36 @@ function powerColumn(log: DSLog | null, analysis: Analysis, stats: Stats, range:
         hint: 'Resting voltage just before enabling. A fresh battery reads 12.8–13.2 V.',
       },
       secs('power.minVoltage.below8', 'Time under 8 V', stats.voltage.below8, {
+        hint: 'How long the battery sat below 8 V, where motors start to lose power.',
         trace: { kind: 'series', signal: 'voltage', threshold: 8 },
       }),
     ],
   });
+  // Brownouts the DS flagged (battery too low) plus the roboRIO's 12 V rail dropping out.
   const bo = overlapping(analysis.brownouts, range);
+  const rail = railDropouts(analysis, range);
+  const events = [
+    ...bo.map((s) => ({ t: s.start, end: s.end, value: s.end - s.start, label: 'battery' })),
+    ...rail.map((t) => ({ t, end: undefined, value: undefined, label: '12 V rail' })),
+  ].sort((a, b) => a.t - b.t);
   rows.push(
-    count('power.brownouts', 'Brownouts', bo.length, {
+    count('power.brownouts', 'Brownouts', events.length, {
       problems: ['brownout', 'brownout-counter'],
-      instances: bo.map((s) => ({ t: s.start, end: s.end, value: s.end - s.start })),
+      instances: events,
       trace: { kind: 'series', signal: 'voltage', spans: 'brownouts', threshold: 6.8 },
-      hint: 'The roboRIO cut motor output because voltage fell too low.',
-      children: [secs('power.brownouts.seconds', 'Seconds', total(bo)), ...spanRows('power.brownouts', bo)],
+      hint: 'Battery voltage fell far enough that the roboRIO cut motor output, or its 12 V rail dropped out (counted the same).',
+      children: [
+        ...(bo.length ? [secs('power.brownouts.seconds', 'Seconds', total(bo), { hint: 'Combined length of all of them.' })] : []),
+        ...events.map((e, i) => ({
+          id: `power.brownouts.i${i}`,
+          label: 'At',
+          sub: e.label,
+          value: e.value ?? NaN,
+          unit: e.value == null ? '' : 's',
+          digits: 1,
+          at: e.t,
+        })),
+      ],
     }),
   );
   return rows;
@@ -366,11 +384,12 @@ function networkColumn(
       zeroIfMissing: true,
       problems: ['network'],
       trace: { kind: 'series', signal: 'loss' },
-      hint: 'Estimated DS packets that got no answer (one packet every 20 ms).',
+      hint: 'Updates between the Driver Station and the robot that never got an answer (they are sent every 20 ms). A few dozen is minor; thousands means a bad connection.',
       children: [
         {
           id: 'network.packetsLost.avg',
           label: 'Average loss',
+          hint: 'The average share of Driver Station packets that got no answer.',
           value: stats.loss.avg,
           unit: '%',
           digits: 1,
@@ -381,6 +400,7 @@ function networkColumn(
         {
           id: 'network.packetsLost.max',
           label: 'Worst loss',
+          hint: 'The highest packet loss at any single moment.',
           value: stats.loss.max,
           unit: '%',
           digits: 0,
@@ -392,6 +412,7 @@ function networkColumn(
         {
           id: 'network.trip.avg',
           label: 'Trip time',
+          hint: 'How long a packet takes to go from the Driver Station to the robot and back. A few milliseconds is normal.',
           value: stats.trip.avg,
           unit: 'ms',
           digits: 1,
@@ -402,6 +423,7 @@ function networkColumn(
         {
           id: 'network.trip.p95',
           label: 'Trip time p95',
+          hint: 'The slowest 5% of round trips. Spikes here are lag the driver can feel.',
           value: stats.trip.p95,
           unit: 'ms',
           digits: 1,
@@ -429,8 +451,11 @@ function networkColumn(
       count('network.fmsDrops', 'FMS drops', fms.length, {
         instances: fms.map((s) => ({ t: s.start, end: s.end, value: s.end - s.start })),
         trace: log ? { kind: 'series', signal: 'trip', spans: 'noComms' } : { kind: 'events' },
-        hint: 'The field connection dropped during the match.',
-        children: [secs('network.fmsDrops.seconds', 'Seconds', total(fms)), ...spanRows('network.fmsDrops', fms)],
+        hint: 'The field system (FMS) lost its connection to your Driver Station during the match.',
+        children: [
+          secs('network.fmsDrops.seconds', 'Seconds', total(fms), { hint: 'Combined length of all of them.' }),
+          ...spanRows('network.fmsDrops', fms),
+        ],
       }),
     );
   }
@@ -442,9 +467,9 @@ function networkColumn(
         problems: ['comms-enabled', 'comms'],
         instances: drops.map((s) => ({ t: s.start, end: s.end, value: s.end - s.start, label: s.enabled ? 'enabled' : 'disabled' })),
         trace: { kind: 'series', signal: 'trip', spans: 'noComms' },
-        hint: 'The Driver Station heard nothing from the robot.',
+        hint: 'The Driver Station stopped hearing from the robot. Usual causes: radio power, the ethernet cable to the roboRIO, or a roboRIO power loss.',
         children: [
-          secs('network.dsDrops.seconds', 'Seconds', total(drops)),
+          secs('network.dsDrops.seconds', 'Seconds', total(drops), { hint: 'Combined length of all of them.' }),
           ...drops.map((s, i) => ({
             id: `network.dsDrops.i${i}`,
             label: 'At',
@@ -498,8 +523,9 @@ function networkColumn(
 function rioColumn(log: DSLog | null, file: DSEventsFile | null, analysis: Analysis, stats: Stats, range: Span): Row[] {
   const rows: Row[] = [];
   if (file) {
+    // 12 V dropouts are counted as brownouts in the Power column; without a .dslog they stay here.
     const rails: ['v12' | 'v5' | 'v3_3', string][] = [
-      ['v12', '12 V'],
+      ...(log ? [] : ([['v12', '12 V']] as ['v12', string][])),
       ['v5', '5 V'],
       ['v3_3', '3.3 V'],
     ];
@@ -520,7 +546,7 @@ function rioColumn(log: DSLog | null, file: DSEventsFile | null, analysis: Analy
         filter: { tag: 'rail' },
         instances: faults,
         trace: log ? { kind: 'series', signal: 'voltage' } : { kind: 'events' },
-        hint: 'The roboRIO shut off its 12 V / 5 V / 3.3 V output (a short or overload on something it powers).',
+        hint: 'The roboRIO shut off its 5 V or 3.3 V output, which means a short or overload on something it powers (sensors, encoders, LEDs).',
         children: faults.map((f, i) => ({
           id: `rio.faults.i${i}`,
           label: 'At',
@@ -549,7 +575,7 @@ function rioColumn(log: DSLog | null, file: DSEventsFile | null, analysis: Analy
       count('rio.reboots', 'RIO reboots', reboots.length, {
         instances: reboots.map((s) => ({ t: s.start, end: s.end, value: s.end - s.start })),
         trace: log ? { kind: 'series', signal: 'voltage', spans: 'noComms' } : { kind: 'events' },
-        hint: 'Comms went away and the robot program started up again afterwards.',
+        hint: 'The robot lost contact for a while and the robot program started up again afterwards, so the roboRIO restarted.',
         children: reboots.map((s, i) => ({
           id: `rio.reboots.i${i}`,
           label: 'At',
@@ -561,11 +587,13 @@ function rioColumn(log: DSLog | null, file: DSEventsFile | null, analysis: Analy
       }),
     );
   }
+  // The raw percentages mean little on their own, so this is one row with no number; the details are inside.
+  const health: Row[] = [];
   if (log) {
-    rows.push(
+    health.push(
       {
         id: 'rio.cpu',
-        label: 'CPU',
+        label: 'Processor load, average',
         value: stats.cpu.avg,
         unit: '%',
         digits: 0,
@@ -573,53 +601,28 @@ function rioColumn(log: DSLog | null, file: DSEventsFile | null, analysis: Analy
         noise: 3,
         problems: ['cpu'],
         trace: { kind: 'series', signal: 'cpu' },
-        children: [
-          {
-            id: 'rio.cpu.max',
-            label: 'Peak',
-            value: stats.cpu.max,
-            unit: '%',
-            digits: 0,
-            at: stats.cpu.maxT,
-            better: 'lower',
-            noise: 4,
-            trace: { kind: 'series', signal: 'cpu' },
-          },
-        ],
+        hint: 'How busy the roboRIO’s processor was on average. Comfortable is under about 60%. Past 85% the robot loop starts running late.',
       },
       {
-        id: 'rio.can',
-        label: 'CAN bus',
-        value: stats.can.avg,
+        id: 'rio.cpu.max',
+        label: 'Processor load, busiest moment',
+        value: stats.cpu.max,
         unit: '%',
         digits: 0,
+        at: stats.cpu.maxT,
         better: 'lower',
-        noise: 3,
-        problems: ['can-util'],
-        trace: { kind: 'series', signal: 'can' },
-        hint: 'Utilization of the roboRIO CAN bus (not a CANivore).',
-        children: [
-          {
-            id: 'rio.can.max',
-            label: 'Peak',
-            value: stats.can.max,
-            unit: '%',
-            digits: 0,
-            at: stats.can.maxT,
-            better: 'lower',
-            noise: 4,
-            trace: { kind: 'series', signal: 'can' },
-          },
-        ],
+        noise: 4,
+        trace: { kind: 'series', signal: 'cpu' },
+        hint: 'The highest processor load at any one moment. Short spikes are normal; a long stretch near 100% is not.',
       },
     );
   }
   const mem = (file?.meta.rioStats ?? []).filter((s) => s.t >= range.start - 30 && s.t <= range.end + 30 && s.value.memMB > 0);
   if (mem.length) {
     const low = mem.reduce((a, s) => (s.value.memMB < a.value.memMB ? s : a));
-    rows.push({
+    health.push({
       id: 'rio.memory',
-      label: 'Memory free',
+      label: 'Memory left, lowest',
       value: low.value.memMB,
       unit: 'MB',
       digits: 0,
@@ -629,8 +632,20 @@ function rioColumn(log: DSLog | null, file: DSEventsFile | null, analysis: Analy
       problems: ['rio-mem'],
       instances: mem.map((s) => ({ t: s.t, value: s.value.memMB })),
       trace: { kind: 'points' },
+      hint: 'How much of the roboRIO’s RAM was still free. If it gets low (under about 50 MB) robot code can slow down or crash. Reported every few seconds by the Driver Station.',
     });
   }
+  if (health.length)
+    rows.push({
+      id: 'rio.health',
+      label: 'roboRIO health',
+      sub: 'processor · memory',
+      value: NaN,
+      unit: '',
+      digits: 0,
+      children: health,
+      hint: 'How hard the roboRIO was working. Open it for the numbers; it turns red if either one is unusual for this robot.',
+    });
   return rows;
 }
 
@@ -676,7 +691,7 @@ function codeColumn(
       eventIds: prints.map((e) => e.id),
       instances: prints.map((e) => ({ t: e.t })),
       trace: { kind: 'events' },
-      hint: 'Lines the robot program printed.',
+      hint: 'Lines your robot code printed (System.out, DataLogManager, library startup messages). Mostly informational.',
       children: messageRows('code.logs', prints),
     }),
   );
@@ -705,40 +720,40 @@ function codeColumn(
       eventIds: overruns.map((e) => e.id),
       instances: overruns.map((e) => ({ t: e.t })),
       trace: log ? { kind: 'series', signal: 'cpu' } : { kind: 'events' },
-      hint: 'The 20 ms robot loop ran late. Children are the slowest step each time.',
-      children: [...steps.entries()]
-        .sort((a, b) => b[1].worst - a[1].worst)
-        .map(([name, c]) => ({
-          id: `code.overruns.${slug(name)}`,
-          label: name,
-          sub: `slowest ${c.n}×`,
-          value: c.worst * 1000,
-          unit: 'ms',
-          digits: 1,
-          at: c.t,
-          better: 'lower' as const,
-          noise: 3,
-        })),
+      hint: 'Each one is a separate loop that ran late (5 overruns means 5 late loops, not one long stall). Robot code is meant to finish a loop every 20 ms. The parts listed inside come from WPILib’s timing printouts, which only some late loops produce, so their counts will not add up to the total here.',
+      children: [
+        // A real freeze (not the blips around auto/teleop changes; see analysis.STALL_MIN). Usually shows up as an overrun too.
+        ...(log && stats.codeStalls.count > 0
+          ? [
+              secs('code.overruns.frozen', 'Program froze', stats.codeStalls.duration, {
+                sub: `${stats.codeStalls.count}× · longest ${stats.codeStalls.longest.toFixed(2)} s`,
+                digits: 2,
+                noise: 0.1,
+                at: stats.codeStalls.longestT,
+                problems: ['code-stall'],
+                instances: overlapping(analysis.codeStalls, range).map((s) => ({ t: s.start, end: s.end, value: s.end - s.start })),
+                trace: { kind: 'series', signal: 'cpu', spans: 'stalls' },
+                hint: 'The robot was enabled and connected, but its program stopped reporting for 100 ms or more. Brief gaps around auto and teleop changes are ignored.',
+              }),
+            ]
+          : []),
+        ...[...steps.entries()]
+          .sort((a, b) => b[1].worst - a[1].worst)
+          .map(([name, c]) => ({
+            id: `code.overruns.${slug(name)}`,
+            label: name,
+            sub: `${FRAMEWORK_EPOCH.test(name) ? 'wrapper · ' : ''}slowest ${c.n}×`,
+            hint: 'The longest this part took in one loop (a whole loop should take 20 ms). “slowest 20×” means it was the slowest part in 20 of the timing printouts. Wrappers like robotPeriodic() include everything inside them, so look for a more specific name.',
+            value: c.worst * 1000,
+            unit: 'ms',
+            digits: 1,
+            at: c.t,
+            better: 'lower' as const,
+            noise: 3,
+          })),
+      ],
     }),
   );
-
-  if (log) {
-    const stalls = overlapping(analysis.codeStalls, range);
-    rows.push(
-      secs('code.unresponsive', 'Unresponsive', stats.codeStalls.duration, {
-        digits: 2,
-        noise: 0.2,
-        problems: ['code-stall'],
-        instances: stalls.map((s) => ({ t: s.start, end: s.end, value: s.end - s.start })),
-        trace: { kind: 'series', signal: 'cpu', spans: 'stalls' },
-        hint: 'Seconds the robot was connected but its program did not report a mode (stuck or slow loop).',
-        children: [
-          secs('code.unresponsive.longest', 'Longest', stats.codeStalls.longest, { digits: 2, noise: 0.1, at: stats.codeStalls.longestT }),
-          count('code.unresponsive.times', 'Times', stalls.length, { noise: 10 }),
-        ],
-      }),
-    );
-  }
 
   const crashes = inRange.filter((e) => e.tags.includes('crash'));
   rows.push(
@@ -754,7 +769,7 @@ function codeColumn(
   return rows;
 }
 
-function devicesColumn(inRange: DSEvent[]): Row[] {
+function devicesColumn(inRange: DSEvent[], log: DSLog | null, stats: Stats, hasEvents: boolean): Row[] {
   const can = inRange.filter((e) => e.tags.includes('can') && (e.kind === 'error' || e.kind === 'warning'));
   const errors = can.filter((e) => e.level === 'error');
   const warnings = can.filter((e) => e.level === 'warning');
@@ -769,11 +784,61 @@ function devicesColumn(inRange: DSEvent[]): Row[] {
       hint,
       children: deviceRows(id, list),
     });
-  return [
-    parent('devices.canErrors', 'CAN errors', errors, 'Errors reported about a CAN device, per device.'),
-    parent('devices.canWarnings', 'CAN warnings', warnings, 'Warnings reported about a CAN device, per device.'),
-    parent('devices.faults', 'Faults', faults, 'Device faults the robot code or vendor library reported.'),
-  ];
+  const rows: Row[] = hasEvents
+    ? [
+        parent(
+          'devices.canErrors',
+          'CAN errors',
+          errors,
+          'A motor controller or sensor on the CAN bus reported an error. Open it to see which device and how many times.',
+        ),
+        parent(
+          'devices.canWarnings',
+          'CAN warnings',
+          warnings,
+          'A device’s data arrived late or not at all, usually from CAN wiring, a busy bus, or power to the device. Open it to see which device.',
+        ),
+        parent('devices.faults', 'Faults', faults, 'Faults a device reported about itself (for example under-voltage or overheating).'),
+      ]
+    : [];
+  // How full the roboRIO's own CAN bus was. No number up front: a percentage means little until you know the limit.
+  if (log)
+    rows.push({
+      id: 'devices.canLoad',
+      label: 'CAN bus load',
+      sub: 'roboRIO bus',
+      value: NaN,
+      unit: '',
+      digits: 0,
+      hint: 'How much of the roboRIO’s CAN bus was in use. Open it for the numbers; it turns red if the load was unusual for this robot.',
+      children: [
+        {
+          id: 'devices.canLoad.avg',
+          label: 'Bus load, average',
+          value: stats.can.avg,
+          unit: '%',
+          digits: 0,
+          better: 'lower',
+          noise: 3,
+          problems: ['can-util'],
+          trace: { kind: 'series', signal: 'can' },
+          hint: 'The share of the CAN bus’s capacity in use on average. Devices on a CANivore are not counted here. Under about 70% is healthy.',
+        },
+        {
+          id: 'devices.canLoad.max',
+          label: 'Bus load, busiest moment',
+          value: stats.can.max,
+          unit: '%',
+          digits: 0,
+          at: stats.can.maxT,
+          better: 'lower',
+          noise: 4,
+          trace: { kind: 'series', signal: 'can' },
+          hint: 'The fullest the bus got. Near 90% devices start missing messages, which shows up as stale-data warnings.',
+        },
+      ],
+    });
+  return rows;
 }
 
 export interface CustomMetric {
@@ -851,7 +916,7 @@ export function buildBoard(log: DSLog | null, file: DSEventsFile | null, analysi
       { id: 'network', title: 'Network', rows: networkColumn(log, file, analysis, s, range, inRange) },
       { id: 'rio', title: 'RIO', rows: rioColumn(log, file, analysis, s, range) },
       { id: 'code', title: 'Code', rows: codeColumn(log, file, analysis, s, range, inRange) },
-      { id: 'devices', title: 'Devices', rows: file ? devicesColumn(inRange) : [] },
+      { id: 'devices', title: 'Devices', rows: devicesColumn(inRange, log, s, !!file) },
       { id: 'performance', title: 'Performance', rows: performanceColumn(inRange) },
     ],
   };

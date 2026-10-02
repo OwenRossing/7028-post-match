@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import type { Severity } from '../../lib/analysis';
-import { demoBaseline, judgeBoard, MIN_HISTORY, pickHistory, type Baseline, type Judgement } from '../../lib/baseline';
-import { buildBoard, type Instance, type Row } from '../../lib/board';
+import { classifyHistory, demoBaseline, judgeBoard, MIN_HISTORY, usesDemoHistory, type Baseline, type Judgement } from '../../lib/baseline';
+import { buildBoard, walkRows, type Instance, type Row } from '../../lib/board';
 import { useChecked } from '../../lib/checked';
 import type { LogEntry } from '../../lib/library';
 import { channelName } from '../../lib/settings';
@@ -79,12 +80,13 @@ export function Board({ ctx, entries }: { ctx: ViewCtx; entries: LogEntry[] }) {
   const board = useMemo(() => buildBoard(log, events, analysis), [log, events, analysis]);
 
   const baseline = useMemo<Baseline>(() => {
-    const points = pickHistory(entries, {
+    // Same inputs as the Library panel, which lists these logs.
+    const { points } = classifyHistory(entries, {
       key: ctx.entry.key,
       startTime: ctx.entry.startTime,
-      team: events?.meta.team,
+      team: ctx.entry.summary?.team ?? events?.meta.team,
     });
-    if (points.length < MIN_HISTORY && ctx.entry.source === 'sample') return demoBaseline(board);
+    if (usesDemoHistory(ctx.entry, points.length)) return demoBaseline(board);
     return { points, demo: false };
   }, [entries, ctx.entry, events, board]);
   const judgements = useMemo(() => judgeBoard(board, baseline), [board, baseline]);
@@ -150,6 +152,7 @@ export function Board({ ctx, entries }: { ctx: ViewCtx; entries: LogEntry[] }) {
   // ---------- Cursor ----------
   const [sel, setSel] = useState<string | null>(null);
   const [inspecting, setInspecting] = useState(false);
+  const [pop, setPop] = useState<{ id: string; rect: DOMRect } | null>(null);
   const [inst, setInst] = useState(0);
 
   const find = (id: string | null) => {
@@ -300,6 +303,11 @@ export function Board({ ctx, entries }: { ctx: ViewCtx; entries: LogEntry[] }) {
       case 'x':
         if (r) toggleChecked(r.id);
         break;
+      case 'i': {
+        const rect = r?.hint ? rootRef.current?.querySelector(`[data-cell="${CSS.escape(r.id)}"]`)?.getBoundingClientRect() : undefined;
+        if (r && rect) setPop((p) => (p?.id === r.id ? null : { id: r.id, rect }));
+        break;
+      }
       case 'e': {
         if (!here) break;
         const tops = board.columns[here.c].rows.filter((x) => x.children?.length);
@@ -321,6 +329,16 @@ export function Board({ ctx, entries }: { ctx: ViewCtx; entries: LogEntry[] }) {
     window.addEventListener('keydown', f, true);
     return () => window.removeEventListener('keydown', f, true);
   }, []);
+
+  // Clicking anywhere outside the details panel closes it. A click on another row just moves the panel to that row.
+  useEffect(() => {
+    if (!inspecting) return;
+    const away = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement | null)?.closest('.insp, .brow')) setInspecting(false);
+    };
+    document.addEventListener('mousedown', away);
+    return () => document.removeEventListener('mousedown', away);
+  }, [inspecting]);
 
   const flagCount = model.flags.length;
   const checkedCount = [...model.where.keys()].filter((id) => checked.has(id)).length;
@@ -367,11 +385,19 @@ export function Board({ ctx, entries }: { ctx: ViewCtx; entries: LogEntry[] }) {
                         cell={c}
                         ctx={ctx}
                         selected={cur?.row.id === c.row.id}
+                        // Mouse: a row with things inside folds and unfolds; a row without opens its details.
                         onClick={() => {
-                          if (cur?.row.id === c.row.id) setInspecting(true);
-                          else select(c.row.id);
+                          select(c.row.id);
+                          if (c.kids) {
+                            toggle(c.row);
+                            setInspecting(false);
+                          } else setInspecting(true);
                         }}
-                        onToggle={() => toggle(c.row)}
+                        onDetails={() => {
+                          select(c.row.id);
+                          setInspecting(true);
+                        }}
+                        onInfo={(rect) => setPop((p) => (p?.id === c.row.id ? null : { id: c.row.id, rect }))}
                       />
                     ))
                   ) : (
@@ -383,13 +409,20 @@ export function Board({ ctx, entries }: { ctx: ViewCtx; entries: LogEntry[] }) {
           })}
         </div>
 
+        {pop && popRow(board, pop.id) && (
+          <InfoPop
+            title={rowLabel(popRow(board, pop.id)!, ctx)}
+            text={popRow(board, pop.id)!.hint ?? ''}
+            rect={pop.rect}
+            onClose={() => setPop(null)}
+          />
+        )}
         {inspecting && cur && (
           <Inspector
             ctx={ctx}
             cell={cur}
             column={board.columns[cur.col].title}
             range={board.range}
-            baseline={baseline}
             instance={inst}
             setInstance={setInst}
             side={side}
@@ -403,18 +436,54 @@ export function Board({ ctx, entries }: { ctx: ViewCtx; entries: LogEntry[] }) {
   );
 }
 
+function popRow(board: ReturnType<typeof buildBoard>, id: string): Row | undefined {
+  for (const col of board.columns) for (const [r] of walkRows(col.rows)) if (r.id === id) return r;
+}
+
+/** The small "what is this?" popup next to a row's info button. */
+function InfoPop({ title, text, rect, onClose }: { title: string; text: string; rect: DOMRect; onClose: () => void }) {
+  useEffect(() => {
+    const down = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement | null)?.closest('.info-pop, .brow-info')) onClose();
+    };
+    const key = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    document.addEventListener('mousedown', down);
+    window.addEventListener('keydown', key, true);
+    return () => {
+      document.removeEventListener('mousedown', down);
+      window.removeEventListener('keydown', key, true);
+    };
+  }, [onClose]);
+  const width = 320;
+  const left = Math.min(Math.max(8, rect.right - width), window.innerWidth - width - 8);
+  const below = rect.bottom + 180 < window.innerHeight;
+  return createPortal(
+    <div
+      className="info-pop"
+      role="tooltip"
+      style={{ left, width, ...(below ? { top: rect.bottom + 6 } : { bottom: window.innerHeight - rect.top + 6 }) }}
+    >
+      <b>{title}</b>
+      <p>{text}</p>
+    </div>,
+    document.body,
+  );
+}
+
 function BoardRow({
   cell,
   ctx,
   selected,
   onClick,
-  onToggle,
+  onDetails,
+  onInfo,
 }: {
   cell: Cell;
   ctx: ViewCtx;
   selected: boolean;
   onClick: () => void;
-  onToggle: () => void;
+  onDetails: () => void;
+  onInfo: (rect: DOMRect) => void;
 }) {
   const { row: r, j, tone } = cell;
   const hasValue = Number.isFinite(r.value);
@@ -435,11 +504,12 @@ function BoardRow({
         .join(' ')}
       data-cell={r.id}
       onClick={onClick}
+      onDoubleClick={onDetails}
       role="row"
       aria-selected={selected}
     >
       {cell.depth > 0 && <span className="brow-guide" aria-hidden="true" />}
-      <span className="brow-twist" onClick={(e) => (e.stopPropagation(), onToggle())} aria-hidden="true">
+      <span className="brow-twist" aria-hidden="true">
         {cell.kids ? <Chevron open={cell.open} /> : null}
       </span>
       <span className="brow-label">
@@ -468,6 +538,23 @@ function BoardRow({
           {cell.hiddenFlags}
         </span>
       )}
+      {r.hint && (
+        <button
+          className="brow-info"
+          title="What is this?  (I)"
+          aria-label="What is this?"
+          onClick={(e) => {
+            e.stopPropagation();
+            onInfo(e.currentTarget.getBoundingClientRect());
+          }}
+          onDoubleClick={(e) => e.stopPropagation()}
+        >
+          <svg width="13" height="13" viewBox="0 0 14 14" aria-hidden="true">
+            <circle cx="7" cy="7" r="5.8" fill="none" stroke="currentColor" strokeWidth="1.3" />
+            <path d="M7 6.2v3.6M7 4.2v.1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+          </svg>
+        </button>
+      )}
       <span className="brow-value">
         {hasValue ? fmtNumber(r.value, r.digits) : ''}
         {hasValue && r.unit && <small>{r.unit}</small>}
@@ -490,13 +577,13 @@ function BaselineNote({ baseline }: { baseline: Baseline }) {
   if (baseline.demo)
     body = (
       <>
-        Compared with <b>{n} demo matches</b> (made up, for the sample)
+        Compared with <b>{n} demo matches</b>
       </>
     );
   else if (n >= MIN_HISTORY)
     body = (
       <>
-        Compared with your <b>last {n} matches</b>
+        Compared with <b>last {n} matches</b>
       </>
     );
   else if (n > 0)
@@ -509,7 +596,7 @@ function BaselineNote({ baseline }: { baseline: Baseline }) {
         matches
       </>
     );
-  else body = <>No earlier matches yet, so nothing is compared</>;
+  else body = <>No earlier matches to compare</>;
   return (
     <div className={`board-base ${baseline.demo ? 'demo' : ''}`}>
       <span className="board-base-dot" />
@@ -523,10 +610,9 @@ function EmptyColumn({ id, ctx }: { id: string; ctx: ViewCtx }) {
     return (
       <div className="bcol-empty">
         <p>
-          <b>Your own numbers go here.</b> Print a line like this from robot code and it becomes a row, compared across matches:
+          <b>Your own numbers.</b> Print one from robot code:
         </p>
         <pre>System.out.println("[pv] Flywheel/Spinup = " + secs + " s");</pre>
-        <p className="muted">Anything before the last “/” groups rows together.</p>
       </div>
     );
   const needs = !ctx.parsed.events ? '.dsevents' : !ctx.parsed.log ? '.dslog' : null;

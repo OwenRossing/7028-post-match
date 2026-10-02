@@ -41,7 +41,8 @@ export interface Stats {
   autoTime: number;
   teleopTime: number;
   voltage: { min: number; minT: number; avg: number; resting: number; below7: number; below8: number };
-  brownouts: { count: number; duration: number; firstT: number };
+  /** Battery brownouts flagged by the DS plus 12 V rail dropouts (`rail`). `count` is both together. */
+  brownouts: { count: number; duration: number; firstT: number; rail: number };
   comms: { drops: number; enabledDrops: number; dropTime: number; firstDropT: number; connectedTime: number };
   trip: { avg: number; p95: number; max: number; maxT: number };
   loss: { avg: number; max: number; maxT: number };
@@ -107,8 +108,11 @@ export interface Analysis {
   modes: ModeSegment[];
   noComms: Span[];
   /** Connected, but the robot code did not report its mode (slow/stuck loop or code restarting). */
+  /** Real freezes of the robot program: connected and enabled, no mode reported for 100 ms+, not at a mode change. */
   codeStalls: Span[];
   brownouts: Span[];
+  /** When the roboRIO's 12 V rail dropped out (from the DS's running "Rail Faults" counter). Counted as brownouts. */
+  rail12: number[];
   watchdog: Span[];
   runs: Run[];
   match?: Run;
@@ -216,7 +220,8 @@ function buildRuns(modes: ModeSegment[], file: DSEventsFile | null): Run[] {
   });
 }
 
-const FRAMEWORK_EPOCH = /^(robotPeriodic|disabledPeriodic|autonomousPeriodic|teleopPeriodic|testPeriodic|simulationPeriodic|disabledInit|autonomousInit|teleopInit|testInit|robotInit|disabledExit|autonomousExit|teleopExit|testExit)\(\)$|^(LiveWindow|SmartDashboard|Shuffleboard)\./;
+export const FRAMEWORK_EPOCH =
+  /^(robotPeriodic|disabledPeriodic|autonomousPeriodic|teleopPeriodic|testPeriodic|simulationPeriodic|disabledInit|autonomousInit|teleopInit|testInit|robotInit|disabledExit|autonomousExit|teleopExit|testExit)\(\)$|^(LiveWindow|SmartDashboard|Shuffleboard)\./;
 
 function loopCulprits(events: DSEvent[]): LoopCulprit[] {
   const map = new Map<string, LoopCulprit>();
@@ -235,7 +240,10 @@ function loopCulprits(events: DSEvent[]): LoopCulprit[] {
 
 function deviceName(e: DSEvent): string | null {
   const loc = e.location ?? '';
-  const m = /^((?:talon ?fx|talon ?srx|victor ?spx|pigeon ?2?|cancoder|candle|canrange|cANdi|spark ?(?:max|flex)?)[^"(]*?\d+)\s*(\("[^"]*"\))?/i.exec(loc);
+  const m =
+    /^((?:talon ?fx|talon ?srx|victor ?spx|pigeon ?2?|cancoder|candle|canrange|cANdi|spark ?(?:max|flex)?)[^"(]*?\d+)\s*(\("[^"]*"\))?/i.exec(
+      loc,
+    );
   if (m) return `${m[1].trim()}${m[2] ? ' ' + m[2] : ''}`;
   const rev = /(SPARK(?: MAX| Flex)?|Spark(?:Max|Flex)?) ?\[?(\d+)\]?/i.exec(e.text);
   if (rev) return `${rev[1]} ${rev[2]}`;
@@ -256,6 +264,22 @@ function canDevices(events: DSEvent[]): DeviceIssue[] {
   return [...map.values()].sort((a, b) => b.count - a.count);
 }
 
+/** The DS keeps a running count of roboRIO 12 V rail faults; each increase is one dropout. */
+function rail12Faults(file: DSEventsFile | null): number[] {
+  const samples = file?.meta.railFaults ?? [];
+  const out: number[] = [];
+  for (let i = 1; i < samples.length; i++) {
+    const d = samples[i].value.v12 - samples[i - 1].value.v12;
+    for (let k = 0; k < d; k++) out.push(samples[i].t);
+  }
+  return out;
+}
+
+/** Gaps shorter than this are single dropped packets, not a frozen program. */
+export const STALL_MIN = 0.1;
+/** The robot reports its mode a moment late whenever the DS changes mode, which looks like a freeze. */
+const STALL_EDGE = 0.5;
+
 export function analyze(log: DSLog | null, file: DSEventsFile | null): Analysis {
   const events = file?.events ?? [];
   if (!log) {
@@ -266,6 +290,7 @@ export function analyze(log: DSLog | null, file: DSEventsFile | null): Analysis 
       noComms: [],
       codeStalls: [],
       brownouts: [],
+      rail12: rail12Faults(file),
       watchdog: [],
       runs: [],
       focus: { start: 0, end: duration },
@@ -277,7 +302,15 @@ export function analyze(log: DSLog | null, file: DSEventsFile | null): Analysis 
   const duration = log.count * log.period;
   const modes = modeSegments(log);
   const noComms = spansWhere(log, (i) => !log.comms[i]);
-  const codeStalls = spansWhere(log, (i) => log.comms[i] === 1 && (log.flags[i] & ROBOT_MODE_MASK) === 0);
+  // "Connected but no mode reported" happens for single packets all match long, and around every auto/teleop
+  // change. Only a longer gap while enabled and away from a mode change means the program really froze.
+  const modeChanges = modes.slice(1).map((m) => m.start);
+  const codeStalls = spansWhere(log, (i) => log.comms[i] === 1 && (log.flags[i] & ROBOT_MODE_MASK) === 0).filter(
+    (s) =>
+      s.end - s.start >= STALL_MIN &&
+      modeOf(log.flags[indexAt(log, s.start)]) !== 'disabled' &&
+      !modeChanges.some((t) => s.start <= t + STALL_EDGE && s.end >= t - STALL_EDGE),
+  );
   const brownouts = spansWhere(log, (i) => (log.flags[i] & FLAG.BROWNOUT) !== 0);
   const watchdog = spansWhere(log, (i) => log.comms[i] === 1 && (log.flags[i] & FLAG.WATCHDOG) !== 0);
   const runs = buildRuns(modes, file);
@@ -300,6 +333,7 @@ export function analyze(log: DSLog | null, file: DSEventsFile | null): Analysis 
     noComms,
     codeStalls,
     brownouts,
+    rail12: rail12Faults(file),
     watchdog,
     runs,
     match,
@@ -329,6 +363,12 @@ function sumSpans(spans: Span[]): number {
   return spans.reduce((a, s) => a + (s.end - s.start), 0);
 }
 
+/** 12 V rail dropouts in a range. One during a flagged brownout is the same event, so it is not counted twice. */
+export function railDropouts(analysis: Analysis, range: Span): number[] {
+  const bo = overlap(analysis.brownouts, range);
+  return analysis.rail12.filter((t) => t >= range.start && t <= range.end && !bo.some((s) => t >= s.start - 1 && t <= s.end + 1));
+}
+
 export function computeStats(log: DSLog | null, file: DSEventsFile | null, analysis: Analysis, range: Span): Stats {
   const events = (file?.events ?? []).filter((e) => e.t >= range.start && e.t <= range.end);
   const evCounts = { error: 0, warning: 0, print: 0, ds: 0, fms: 0 };
@@ -341,7 +381,7 @@ export function computeStats(log: DSLog | null, file: DSEventsFile | null, analy
     autoTime: 0,
     teleopTime: 0,
     voltage: { min: NaN, minT: NaN, avg: NaN, resting: NaN, below7: 0, below8: 0 },
-    brownouts: { count: 0, duration: 0, firstT: NaN },
+    brownouts: { count: 0, duration: 0, firstT: NaN, rail: 0 },
     comms: { drops: 0, enabledDrops: 0, dropTime: 0, firstDropT: NaN, connectedTime: 0 },
     trip: { avg: NaN, p95: NaN, max: NaN, maxT: NaN },
     loss: { avg: NaN, max: NaN, maxT: NaN },
@@ -368,14 +408,25 @@ export function computeStats(log: DSLog | null, file: DSEventsFile | null, analy
   }
 
   const series = (arr: Float32Array) => {
-    let sum = 0, n = 0, max = -Infinity, maxI = -1, min = Infinity, minI = -1;
+    let sum = 0,
+      n = 0,
+      max = -Infinity,
+      maxI = -1,
+      min = Infinity,
+      minI = -1;
     for (let i = i0; i <= i1; i++) {
       const v = arr[i];
       if (Number.isNaN(v)) continue;
       sum += v;
       n++;
-      if (v > max) { max = v; maxI = i; }
-      if (v < min) { min = v; minI = i; }
+      if (v > max) {
+        max = v;
+        maxI = i;
+      }
+      if (v < min) {
+        min = v;
+        minI = i;
+      }
     }
     return { avg: n ? sum / n : NaN, max: n ? max : NaN, maxT: maxI * dt, min: n ? min : NaN, minT: minI * dt, n };
   };
@@ -400,7 +451,14 @@ export function computeStats(log: DSLog | null, file: DSEventsFile | null, analy
   }
 
   const bo = overlap(analysis.brownouts, range);
-  stats.brownouts = { count: bo.length, duration: sumSpans(bo), firstT: bo[0]?.start ?? NaN };
+  const rail = railDropouts(analysis, range);
+  const firstBrownout = Math.min(bo[0]?.start ?? Infinity, rail[0] ?? Infinity);
+  stats.brownouts = {
+    count: bo.length + rail.length,
+    duration: sumSpans(bo),
+    firstT: Number.isFinite(firstBrownout) ? firstBrownout : NaN,
+    rail: rail.length,
+  };
   const wd = overlap(analysis.watchdog, range);
   stats.watchdog = { count: wd.length, duration: sumSpans(wd), firstT: wd[0]?.start ?? NaN };
   const stalls = overlap(analysis.codeStalls, range);
@@ -466,31 +524,47 @@ function counterDelta<T>(samples: { t: number; value: T }[], key: keyof T, range
 export const BROWNOUT_VOLTS = 6.8;
 
 /** Finds the things a team should know about, most severe first. */
-export function findProblems(
-  log: DSLog | null,
-  file: DSEventsFile | null,
-  analysis: Analysis,
-  stats: Stats,
-): Problem[] {
+export function findProblems(log: DSLog | null, file: DSEventsFile | null, analysis: Analysis, stats: Stats): Problem[] {
   const out: Problem[] = [];
-  const at = (t: number) => (Number.isFinite(t) ? ` at ${fmtDuration(t - (analysis.match?.start ?? 0), 1)}${analysis.match ? ' match time' : ''}` : '');
+  const at = (t: number) =>
+    Number.isFinite(t) ? ` at ${fmtDuration(t - (analysis.match?.start ?? 0), 1)}${analysis.match ? ' match time' : ''}` : '';
   const events = file?.events ?? [];
   const inRange = events.filter((e) => e.t >= stats.span.start && e.t <= stats.span.end);
 
-  if (!log) out.push({ id: 'no-dslog', severity: 'info', title: 'No .dslog file', detail: 'Only messages are available. Add the matching .dslog to see graphs.' });
-  if (!file) out.push({ id: 'no-events', severity: 'info', title: 'No .dsevents file', detail: 'Graphs only. Add the matching .dsevents file to see errors, prints and match info.' });
+  if (!log)
+    out.push({
+      id: 'no-dslog',
+      severity: 'info',
+      title: 'No .dslog file',
+      detail: 'Only messages are available. Add the matching .dslog to see graphs.',
+    });
+  if (!file)
+    out.push({
+      id: 'no-events',
+      severity: 'info',
+      title: 'No .dsevents file',
+      detail: 'Graphs only. Add the matching .dsevents file to see errors, prints and match info.',
+    });
 
   if (log) {
-    if (stats.brownouts.count > 0)
+    if (stats.brownouts.count > 0) {
+      const flagged = stats.brownouts.count - stats.brownouts.rail;
+      const rail = stats.brownouts.rail;
+      const parts = [
+        flagged > 0 &&
+          `The roboRIO cut motor output ${flagged === 1 ? 'once' : `${flagged}×`} because battery voltage fell below ~${BROWNOUT_VOLTS} V`,
+        rail > 0 && `its 12 V rail dropped out ${rail === 1 ? 'once' : `${rail}×`}, which is counted as a brownout too`,
+      ].filter(Boolean) as string[];
       out.push({
         id: 'brownout',
         severity: 'bad',
-        title: `Brownout ×${stats.brownouts.count} (${fmtSpan(stats.brownouts.duration)} total)`,
-        detail: `The roboRIO cut motor output because battery voltage fell below ~${BROWNOUT_VOLTS} V${at(stats.brownouts.firstT)}.`,
+        title: `Brownout ×${stats.brownouts.count}${stats.brownouts.duration > 0 ? ` (${fmtSpan(stats.brownouts.duration)} total)` : ''}`,
+        detail: `${parts.join('; ')}${at(stats.brownouts.firstT)}.`.replace(/^./, (c) => c.toUpperCase()),
         fix: 'Swap in a fully charged battery. Then check the battery lead, Anderson connector and main breaker are tight, and look at the current graph for a mechanism stalling at that moment.',
         t: stats.brownouts.firstT,
         chart: 'voltage',
       });
+    }
     if (stats.voltage.min < 7)
       out.push({
         id: 'volt-low',
@@ -598,7 +672,12 @@ export function findProblems(
 
   if (file) {
     const meta = file.meta;
-    const rails: [keyof EventsRail, string][] = [['v12', '12V'], ['v5', '5V'], ['v3_3', '3.3V']];
+    // 12 V rail dropouts are counted as brownouts above; they only appear here when there is no .dslog to count them in.
+    const rails: [keyof EventsRail, string][] = [
+      ...(log ? [] : ([['v12', '12V']] as [keyof EventsRail, string][])),
+      ['v5', '5V'],
+      ['v3_3', '3.3V'],
+    ];
     for (const [key, name] of rails) {
       const d = counterDelta(meta.railFaults, key);
       if (d.delta > 0)
@@ -612,7 +691,13 @@ export function findProblems(
           tag: 'rail',
         });
       else if (d.last > 0)
-        out.push({ id: `rail-${key}`, severity: 'info', title: `roboRIO reports ${d.last} ${name} rail faults since boot`, detail: 'None happened during this log.', tag: 'rail' });
+        out.push({
+          id: `rail-${key}`,
+          severity: 'info',
+          title: `roboRIO reports ${d.last} ${name} rail faults since boot`,
+          detail: 'None happened during this log.',
+          tag: 'rail',
+        });
     }
     const bo = counterDelta(meta.powerCounters, 'brownouts');
     if (bo.delta > 0 && !out.some((p) => p.id === 'brownout'))
@@ -626,7 +711,12 @@ export function findProblems(
         chart: 'voltage',
       });
     else if (bo.last > 0 && !out.some((p) => p.id === 'brownout'))
-      out.push({ id: 'brownout-counter', severity: 'info', title: `roboRIO reports ${bo.last} brownout(s) since boot`, detail: 'None were flagged during this log, so they happened earlier (maybe a previous match).' });
+      out.push({
+        id: 'brownout-counter',
+        severity: 'info',
+        title: `roboRIO reports ${bo.last} brownout(s) since boot`,
+        detail: 'None were flagged during this log, so they happened earlier (maybe a previous match).',
+      });
 
     const crashes = inRange.filter((e) => e.tags.includes('crash'));
     if (crashes.length)
@@ -676,7 +766,10 @@ export function findProblems(
         id: 'can-devices',
         severity: 'warn',
         title: `${total} CAN device message${total === 1 ? '' : 's'}`,
-        detail: `From ${analysis.canDevices.slice(0, 4).map((d) => `${d.device} (×${d.count})`).join(', ')}${analysis.canDevices.length > 4 ? '…' : ''}.`,
+        detail: `From ${analysis.canDevices
+          .slice(0, 4)
+          .map((d) => `${d.device} (×${d.count})`)
+          .join(', ')}${analysis.canDevices.length > 4 ? '…' : ''}.`,
         fix: 'Check CAN wiring, termination and power to those devices.',
         t: analysis.canDevices[0].firstT,
         tag: 'can',
@@ -734,9 +827,28 @@ export function findProblems(
   // Most severe first; within a severity, what most likely cost the match comes first.
   const order: Record<Severity, number> = { bad: 0, warn: 1, info: 2 };
   const urgency = [
-    'brownout', 'brownout-counter', 'crash', 'comms-enabled', 'rail-v12', 'rail-v5', 'rail-v3_3', 'code-stall',
-    'volt-low', 'volt-start', 'watchdog', 'loop', 'can-devices', 'errors', 'volt-sag', 'comms', 'network',
-    'can-util', 'cpu', 'rio-mem', 'laptop-batt', 'radio-fw',
+    'brownout',
+    'brownout-counter',
+    'crash',
+    'comms-enabled',
+    'rail-v12',
+    'rail-v5',
+    'rail-v3_3',
+    'code-stall',
+    'volt-low',
+    'volt-start',
+    'watchdog',
+    'loop',
+    'can-devices',
+    'errors',
+    'volt-sag',
+    'comms',
+    'network',
+    'can-util',
+    'cpu',
+    'rio-mem',
+    'laptop-batt',
+    'radio-fw',
   ];
   const rank = (p: Problem) => {
     const i = urgency.indexOf(p.id);

@@ -1,7 +1,18 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { analyze } from '../src/lib/analysis';
-import { demoBaseline, judge, judgeBoard, MIN_HISTORY, shortLabel, type Baseline } from '../src/lib/baseline';
+import { analyze, STALL_MIN } from '../src/lib/analysis';
+import {
+  classifyHistory,
+  demoBaseline,
+  HISTORY_SIZE,
+  judge,
+  judgeBoard,
+  MIN_HISTORY,
+  shortLabel,
+  usesDemoHistory,
+  type Baseline,
+} from '../src/lib/baseline';
+import type { LogEntry } from '../src/lib/library';
 import { boardMetrics, buildBoard, customMetrics, deviceOf, walkRows, type Row } from '../src/lib/board';
 import { parseDSEvents, type DSEvent } from '../src/lib/dsevents';
 import { parseDSLog } from '../src/lib/dslog';
@@ -44,11 +55,31 @@ describe('board for the sample match', () => {
     expect(r.children![0].sub).toContain('canivore');
   });
 
-  it('lists each rail fault with its time', () => {
-    const r = rowById(board, 'rio.faults');
+  it('counts 12 V rail dropouts as brownouts, each with its time', () => {
+    const r = rowById(board, 'power.brownouts');
     expect(r.value).toBe(9);
-    expect(r.children).toHaveLength(9);
-    expect(r.children!.every((c) => c.at != null && c.sub === '12 V rail')).toBe(true);
+    const times = r.children!.filter((c) => c.label === 'At');
+    expect(times).toHaveLength(9);
+    expect(times.every((c) => c.at != null && c.sub === '12 V rail')).toBe(true);
+    // not also listed as a roboRIO fault
+    expect(rowById(board, 'rio.faults').value).toBe(0);
+  });
+
+  it('keeps processor and memory behind one row with no number, and puts CAN bus load under Devices', () => {
+    const health = rowById(board, 'rio.health');
+    expect(Number.isNaN(health.value)).toBe(true);
+    expect(health.children!.map((c) => c.id)).toEqual(['rio.cpu', 'rio.cpu.max', 'rio.memory']);
+    expect(health.children!.every((c) => c.hint)).toBe(true);
+    const can = rowById(board, 'devices.canLoad');
+    expect(Number.isNaN(can.value)).toBe(true);
+    expect(can.label).toBe('CAN bus load');
+    expect(board.columns.find((c) => c.id === 'rio')!.rows.some((r) => r.id.startsWith('rio.can'))).toBe(false);
+  });
+
+  it('has no separate row for a frozen program unless there was a real freeze', () => {
+    expect(() => rowById(board, 'code.unresponsive')).toThrow();
+    const frozen = rowById(board, 'code.overruns').children!.filter((c) => c.id === 'code.overruns.frozen');
+    expect(frozen.length).toBeLessThanOrEqual(1);
   });
 
   it('keeps loop output out of Logs and cleans step names', () => {
@@ -127,6 +158,57 @@ describe('judging a row against history', () => {
   it('shortens match titles for chart labels', () => {
     expect(shortLabel('Qualification 22')).toBe('Q22');
     expect(shortLabel('Playoff 4 (replay 2)')).toBe('P4');
+  });
+});
+
+describe('which logs make up the comparison', () => {
+  const entry = (key: string, startTime: number, summary: Partial<NonNullable<LogEntry['summary']>> | null): LogEntry => ({
+    key,
+    source: 'folder',
+    startTime,
+    summary: summary
+      ? ({ title: `Qualification ${startTime}`, isMatch: true, team: 7028, metrics: { x: 1 }, ...summary } as LogEntry['summary'])
+      : undefined,
+  });
+
+  it('uses the newest 15 earlier matches of the same team and says why the rest are left out', () => {
+    const logs: LogEntry[] = [
+      ...Array.from({ length: 17 }, (_, i) => entry(`m${i}`, 100 + i, {})),
+      entry('practice', 150, { isMatch: false }),
+      entry('other-team', 151, { team: 254 }),
+      entry('unread', 152, null),
+      entry('later', 500, {}),
+      entry('now', 300, {}),
+    ];
+    const { points, status } = classifyHistory(logs, { key: 'now', startTime: 300, team: 7028 });
+    expect(points).toHaveLength(HISTORY_SIZE);
+    expect(points.map((p) => p.key)).toEqual(Array.from({ length: 15 }, (_, i) => `m${i + 2}`)); // oldest first
+    expect(status.get('m2')).toEqual({ used: true });
+    expect(status.get('m0')).toMatchObject({ used: false, reason: expect.stringMatching(/15 most recent/) });
+    expect(status.get('practice')).toMatchObject({ used: false, reason: expect.stringMatching(/Not a match/) });
+    expect(status.get('other-team')).toMatchObject({ used: false, reason: expect.stringMatching(/254/) });
+    expect(status.get('unread')).toMatchObject({ used: false, reason: expect.stringMatching(/Still being read/) });
+    expect(status.get('later')).toMatchObject({ used: false, reason: expect.stringMatching(/after this match/) });
+    expect(status.get('now')).toMatchObject({ used: false });
+  });
+
+  it('only shows made-up history for the sample, and only when there is no real history', () => {
+    expect(usesDemoHistory({ source: 'sample' }, 0)).toBe(true);
+    expect(usesDemoHistory({ source: 'sample' }, 5)).toBe(false);
+    expect(usesDemoHistory({ source: 'folder' }, 0)).toBe(false);
+  });
+});
+
+describe('frozen program detection', () => {
+  it('ignores single-packet gaps and the ones at mode changes in the sample', () => {
+    const log = parseDSLog(load('dslog'));
+    const events = parseDSEvents(load('dsevents'), log.startTime);
+    const a = analyze(log, events);
+    const changes = a.modes.slice(1).map((m) => m.start);
+    for (const s of a.codeStalls) {
+      expect(s.end - s.start).toBeGreaterThanOrEqual(STALL_MIN);
+      expect(changes.every((t) => Math.abs(s.start - t) > 0.5)).toBe(true);
+    }
   });
 });
 

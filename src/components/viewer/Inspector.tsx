@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react';
 import type { Span } from '../../lib/analysis';
-import { MIN_HISTORY, type Baseline, type Judgement } from '../../lib/baseline';
+import { MIN_HISTORY, type Judgement } from '../../lib/baseline';
 import type { Instance, Row, SpanKind, Trace } from '../../lib/board';
 import type { DSLog } from '../../lib/dslog';
 import { deltaText, fmtNumber, rowLabel, type Cell } from './Board';
@@ -11,7 +11,6 @@ interface Props {
   cell: Cell;
   column: string;
   range: Span;
-  baseline: Baseline;
   instance: number;
   setInstance: (i: number) => void;
   side: 'left' | 'right';
@@ -23,7 +22,7 @@ interface Props {
 const val = (r: Row, v: number) => `${fmtNumber(v, r.digits)}${r.unit ? ` ${r.unit}` : ''}`;
 
 /** The detail behind one board row: how it compares, when it happened, and what was said about it. */
-export function Inspector({ ctx, cell, column, range, baseline, instance, setInstance, side, onClose, onGraphs, onMessages }: Props) {
+export function Inspector({ ctx, cell, column, range, instance, setInstance, side, onClose, onGraphs, onMessages }: Props) {
   const { row: r, j, tone } = cell;
   const problems = ctx.problems.filter((p) => p.severity !== 'info' && r.problems?.includes(p.id));
   const list: Instance[] = r.instances ?? (r.at != null ? [{ t: r.at }] : []);
@@ -76,15 +75,13 @@ export function Inspector({ ctx, cell, column, range, baseline, instance, setIns
               {r.unit && <small>{r.unit}</small>}
             </div>
           )}
-          <Verdict row={r} j={j} demo={baseline.demo} failsCheck={problems.length > 0} />
+          <Verdict row={r} j={j} failsCheck={problems.length > 0} />
           {r.hint && <p className="insp-hint">{r.hint}</p>}
         </div>
 
         {j && j.enough && (
           <section className="insp-sec">
-            <h3>
-              Last {j.n} matches <span>and this one</span>
-            </h3>
+            <h3>Last {j.n} matches</h3>
             <HistoryChart row={r} j={j} tone={tone} />
           </section>
         )}
@@ -158,26 +155,11 @@ export function Inspector({ ctx, cell, column, range, baseline, instance, setIns
           </section>
         )}
       </div>
-      <div className="insp-keys">
-        <span>
-          <kbd>↑</kbd>
-          <kbd>↓</kbd> next row
-        </span>
-        <span>
-          <kbd>Enter</kbd> graphs
-        </span>
-        <span>
-          <kbd>M</kbd> messages
-        </span>
-        <span>
-          <kbd>Esc</kbd> close
-        </span>
-      </div>
     </aside>
   );
 }
 
-function Verdict({ row: r, j, demo, failsCheck }: { row: Row; j?: Judgement; demo: boolean; failsCheck: boolean }) {
+function Verdict({ row: r, j, failsCheck }: { row: Row; j?: Judgement; failsCheck: boolean }) {
   if (!r.better) return null;
   if (!j) return null;
   if (!j.enough)
@@ -189,24 +171,22 @@ function Verdict({ row: r, j, demo, failsCheck }: { row: Row; j?: Judgement; dem
   const lo = Math.max(0, j.mean - 2 * j.spread);
   const hi = j.mean + 2 * j.spread;
   const usual = `${fmtNumber(lo, r.digits)}–${fmtNumber(hi, r.digits)}${r.unit ? ` ${r.unit}` : ''}`;
-  const whose = demo ? 'the demo matches' : `your last ${j.n} matches`;
   if (j.flagged)
     return (
       <p className="insp-verdict bad">
-        <b>{deltaText(r, j)}.</b> Usually {usual} in {whose}. This is {Math.abs(j.z).toFixed(1)} standard deviations{' '}
-        {j.z > 0 ? 'above' : 'below'} the average of {val(r, j.mean)}.
+        <b>{deltaText(r, j)}</b> · usually {usual}
       </p>
     );
   // Usual for this robot can still be bad (every match dipping under 7 V), so don't sound like an all-clear then.
   if (failsCheck)
     return (
       <p className="insp-verdict">
-        <b>Usual for this robot</b> ({usual} in {whose}), but it still fails a check below.
+        <b>Usual for this robot</b> ({usual}), but still a problem
       </p>
     );
   return (
     <p className="insp-verdict ok">
-      <b>Normal for this robot.</b> Usually {usual} in {whose}.
+      <b>Normal</b> · usually {usual}
     </p>
   );
 }
@@ -260,7 +240,7 @@ function HistoryChart({ row: r, j, tone }: { row: Row; j: Judgement; tone: Cell[
           <i className="lg-band" /> usual range
         </span>
         <span>
-          <i className="lg-mean" /> average {val(r, j.mean)}
+          <i className="lg-mean" /> average
         </span>
       </div>
     </div>

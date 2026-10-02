@@ -49,21 +49,44 @@ export function shortLabel(title: string): string {
   return title.length > 10 ? title.slice(0, 9) + '…' : title;
 }
 
-/** The robot's matches before this one, newest last. */
-export function pickHistory(entries: Iterable<LogEntry>, current: { key: string; startTime: number; team?: number }): HistoryPoint[] {
-  return [...entries]
-    .filter(
-      (e) =>
-        e.key !== current.key &&
-        e.summary?.isMatch &&
-        e.summary.metrics &&
-        e.startTime < current.startTime &&
-        (current.team == null || e.summary.team == null || e.summary.team === current.team),
-    )
-    .sort((a, b) => b.startTime - a.startTime)
+/** Whether a log is part of the comparison, and if not, why. */
+export type HistoryStatus = { used: true } | { used: false; reason: string };
+
+/** True when there is not enough real history and the sample log should show made-up matches instead. */
+export function usesDemoHistory(entry: { source: string }, realCount: number): boolean {
+  return entry.source === 'sample' && realCount < MIN_HISTORY;
+}
+
+/**
+ * Decides which logs make up "normal" for a match: the robot's most recent earlier matches. Every log in the
+ * library gets a status, so the Library panel can show exactly what is (and is not) being compared against.
+ */
+export function classifyHistory(
+  entries: Iterable<LogEntry>,
+  current: { key: string; startTime: number; team?: number },
+): { points: HistoryPoint[]; status: Map<string, HistoryStatus> } {
+  const status = new Map<string, HistoryStatus>();
+  const candidates: LogEntry[] = [];
+  for (const e of entries) {
+    const s = e.summary;
+    const no = (reason: string) => status.set(e.key, { used: false, reason });
+    if (e.key === current.key) no('This is the match being viewed');
+    else if (!s) no('Still being read');
+    else if (!s.isMatch) no('Not a match (the robot was never enabled for a full auto and teleop)');
+    else if (!s.metrics) no('Needs reading again');
+    else if (current.team != null && s.team != null && s.team !== current.team) no(`Team ${s.team}, not ${current.team}`);
+    else if (e.startTime >= current.startTime) no('Happened after this match');
+    else candidates.push(e);
+  }
+  candidates.sort((a, b) => b.startTime - a.startTime);
+  candidates.forEach((e, i) =>
+    status.set(e.key, i < HISTORY_SIZE ? { used: true } : { used: false, reason: `Older than the ${HISTORY_SIZE} most recent matches` }),
+  );
+  const points = candidates
     .slice(0, HISTORY_SIZE)
     .reverse()
     .map((e) => ({ key: e.key, startTime: e.startTime, label: shortLabel(e.summary!.title), metrics: e.summary!.metrics! }));
+  return { points, status };
 }
 
 export function judge(row: Row, baseline: Baseline): Judgement | null {

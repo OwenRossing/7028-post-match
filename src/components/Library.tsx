@@ -1,12 +1,22 @@
 import { useMemo, useState } from 'react';
+import { MIN_HISTORY, type HistoryStatus } from '../lib/baseline';
 import { versionKey, type LogEntry } from '../lib/library';
 import { fmtClock, fmtDate, fmtSpan } from '../lib/time';
 import { Icon } from './Icon';
 
 type Filter = 'all' | 'matches' | 'enabled' | 'issues';
 
+/** Which logs the open match is being compared against (see lib/baseline.ts). */
+export interface BaselineInfo {
+  title: string;
+  /** The sample match shows made-up history instead. */
+  demo: boolean;
+  status: Map<string, HistoryStatus>;
+}
+
 interface Props {
   entries: LogEntry[];
+  baseline: BaselineInfo | null;
   selectedKey: string | null;
   onSelect: (key: string) => void;
   indexing: number;
@@ -44,20 +54,40 @@ function shortTitle(e: LogEntry): string {
   if (!s) return e.key;
   if (s.isMatch && s.matchType && s.matchNumber && s.fms) {
     const t = s.matchType;
-    const prefix = t.startsWith('Qual') ? 'Qual' : t.startsWith('Pract') ? 'Practice' : t.startsWith('Elim') || t.startsWith('Play') ? 'Playoff' : t;
+    const prefix = t.startsWith('Qual')
+      ? 'Qual'
+      : t.startsWith('Pract')
+        ? 'Practice'
+        : t.startsWith('Elim') || t.startsWith('Play')
+          ? 'Playoff'
+          : t;
     return `${prefix} ${s.matchNumber}`;
   }
   return s.title;
 }
 
 export function Library(props: Props) {
-  const { entries, selectedKey, onSelect, indexing, compareSelecting, compareKeys } = props;
+  const { entries, baseline, selectedKey, onSelect, indexing, compareSelecting, compareKeys } = props;
   const [q, setQ] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
+  const [onlyBaseline, setOnlyBaseline] = useState(false);
+  const status = baseline && !baseline.demo ? baseline.status : null;
+  const used = useMemo(() => entries.filter((e) => status?.get(e.key)?.used), [entries, status]);
+  const skipped = useMemo(
+    () =>
+      entries.flatMap((e) =>
+        status && !status.get(e.key)?.used && e.key !== selectedKey
+          ? [{ e, reason: (status.get(e.key) as { reason: string } | undefined)?.reason ?? '' }]
+          : [],
+      ),
+    [entries, status, selectedKey],
+  );
+  const filterByBaseline = onlyBaseline && !!status;
 
   const shown = useMemo(
     () =>
       entries.filter((e) => {
+        if (filterByBaseline && !status?.get(e.key)?.used) return false;
         if (!matchesQuery(e, q.trim())) return false;
         const s = e.summary;
         if (filter === 'matches') return !!s?.isMatch;
@@ -65,7 +95,7 @@ export function Library(props: Props) {
         if (filter === 'issues') return !!s && s.verdict !== 'ok';
         return true;
       }),
-    [entries, q, filter],
+    [entries, q, filter, filterByBaseline, status],
   );
 
   const groups = useMemo(() => {
@@ -107,12 +137,21 @@ export function Library(props: Props) {
           <span>Library · {entries.length}</span>
           <span className="row" style={{ gap: 4 }}>
             {indexing > 0 && (
-              <span className="row" style={{ gap: 6, textTransform: 'none', letterSpacing: 0, fontWeight: 500 }} title="Reading logs in the background">
+              <span
+                className="row"
+                style={{ gap: 6, textTransform: 'none', letterSpacing: 0, fontWeight: 500 }}
+                title="Reading logs in the background"
+              >
                 <span className="spinner" style={{ width: 11, height: 11, borderWidth: 1.5 }} /> {indexing}
               </span>
             )}
             {!compareSelecting && entries.length > 1 && (
-              <button className="btn small ghost" onClick={props.beginCompare} title="Compare logs" style={{ textTransform: 'none', letterSpacing: 0 }}>
+              <button
+                className="btn small ghost"
+                onClick={props.beginCompare}
+                title="Compare logs"
+                style={{ textTransform: 'none', letterSpacing: 0 }}
+              >
                 <Icon name="compare" size={13} /> Compare
               </button>
             )}
@@ -137,8 +176,54 @@ export function Library(props: Props) {
           ))}
         </div>
       </div>
+      {baseline && !compareSelecting && (
+        <div className="lib-base">
+          <div className="lib-base-head">
+            <span className="lib-base-label">Compared against</span>
+            {status && used.length > 0 && (
+              <button className="link" onClick={() => setOnlyBaseline((v) => !v)}>
+                {onlyBaseline ? 'Show all logs' : 'Show only these'}
+              </button>
+            )}
+          </div>
+          {baseline.demo ? (
+            <p>
+              <b>Made-up demo matches.</b> Only for the sample.
+            </p>
+          ) : used.length >= MIN_HISTORY ? (
+            <p>
+              <b>{used.length} earlier matches</b>, tagged below.
+            </p>
+          ) : (
+            <p>
+              <b>
+                {used.length} of {MIN_HISTORY}
+              </b>{' '}
+              earlier matches so far.
+            </p>
+          )}
+          {status && skipped.length > 0 && (
+            <details className="lib-base-skipped">
+              <summary>
+                {skipped.length} {skipped.length === 1 ? 'log' : 'logs'} not used
+              </summary>
+              <ul>
+                {skipped.slice(0, 40).map(({ e, reason }) => (
+                  <li key={e.key}>
+                    <span className="mono">{e.key}</span>
+                    <span>{reason}</span>
+                  </li>
+                ))}
+                {skipped.length > 40 && <li className="faint">and {skipped.length - 40} more</li>}
+              </ul>
+            </details>
+          )}
+        </div>
+      )}
       <div className="lib-list">
-        {!entries.length && <div className="lib-empty">No logs yet. Drop .dslog / .dsevents files anywhere, or connect the DS log folder.</div>}
+        {!entries.length && (
+          <div className="lib-empty">No logs yet. Drop .dslog / .dsevents files anywhere, or connect the DS log folder.</div>
+        )}
         {entries.length > 0 && !shown.length && <div className="lib-empty">Nothing matches.</div>}
         {groups.map((g) => (
           <div key={g.label}>
@@ -153,6 +238,9 @@ export function Library(props: Props) {
                 selected={selectedKey === e.key}
                 compare={compareSelecting}
                 checked={compareKeys.includes(e.key)}
+                inBaseline={!compareSelecting && !!status?.get(e.key)?.used}
+                showFile={filterByBaseline}
+                reason={status && e.key !== selectedKey ? (status.get(e.key) as { reason?: string } | undefined)?.reason : undefined}
                 onClick={() => (compareSelecting ? props.toggleCompare(e.key) : onSelect(e.key))}
               />
             ))}
@@ -161,10 +249,12 @@ export function Library(props: Props) {
       </div>
       {hasSaved && (
         <div className="sidebar-foot">
-          <span>Opened logs are saved in this browser for offline use.</span>
+          <span>Saved in this browser</span>
           <button
             className="btn small ghost"
-            onClick={() => confirm('Remove all saved logs from this browser? Logs in a connected folder are not affected.') && props.onClearSaved()}
+            onClick={() =>
+              confirm('Remove all saved logs from this browser? Logs in a connected folder are not affected.') && props.onClearSaved()
+            }
             title="Remove saved logs"
           >
             <Icon name="trash" size={13} />
@@ -175,20 +265,58 @@ export function Library(props: Props) {
   );
 }
 
-function Row({ e, selected, compare, checked, onClick }: { e: LogEntry; selected: boolean; compare: boolean; checked: boolean; onClick: () => void }) {
+function Row({
+  e,
+  selected,
+  compare,
+  checked,
+  inBaseline,
+  showFile,
+  reason,
+  onClick,
+}: {
+  e: LogEntry;
+  selected: boolean;
+  compare: boolean;
+  checked: boolean;
+  /** Part of what the open match is compared against. */
+  inBaseline: boolean;
+  /** Show the file name (the Show only these view). */
+  showFile: boolean;
+  /** Why this log is not part of the comparison, when there is one. */
+  reason?: string;
+  onClick: () => void;
+}) {
   const s = e.summary;
   const pending = e.summaryKey !== versionKey(e) && !e.summaryError;
   const live = (e.source === 'folder' || e.source === 'companion') && Date.now() - (e.dslog?.mtime ?? 0) < 20000;
   const idle = s && !s.enabledTime && !s.isMatch;
   return (
-    <div className={`lib-row ${selected ? 'selected' : ''}`} onClick={onClick} style={idle && !selected ? { opacity: 0.62 } : undefined}>
+    <div
+      className={`lib-row ${selected ? 'selected' : ''} ${inBaseline ? 'in-baseline' : ''}`}
+      onClick={onClick}
+      style={idle && !selected ? { opacity: 0.62 } : undefined}
+      title={reason ? `Not part of the comparison: ${reason}` : undefined}
+    >
       {compare ? (
         <input type="checkbox" checked={checked} readOnly />
       ) : (
-        <span className={`dot ${s ? s.verdict : 'none'}`} title={s ? (s.verdict === 'ok' ? 'Healthy' : `${s.problemCount} issue(s)`) : 'Not read yet'} />
+        <span
+          className={`dot ${s ? s.verdict : 'none'}`}
+          title={s ? (s.verdict === 'ok' ? 'Healthy' : `${s.problemCount} issue(s)`) : 'Not read yet'}
+        />
       )}
-      <span className="title">{shortTitle(e)}</span>
+      <span className="title">
+        {shortTitle(e)}
+        {inBaseline && <span className="lib-tag">baseline</span>}
+      </span>
       <span className="time">{fmtClock(e.startTime, false)}</span>
+      {showFile && (
+        <div className="lib-file mono" title="The files read for this match">
+          {e.key}
+          <span>{[e.dslog && '.dslog', e.dsevents && '.dsevents'].filter(Boolean).join(' + ')}</span>
+        </div>
+      )}
       <div className="meta">
         {e.summaryError ? (
           <span style={{ color: 'var(--bad)' }}>Unreadable: {e.summaryError}</span>

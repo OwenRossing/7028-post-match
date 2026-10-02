@@ -2255,8 +2255,16 @@ h3 {
   flex-wrap: wrap;
   justify-content: center;
   gap: 8px 26px;
-  margin-top: 22px;
+  margin-top: 26px;
   font-size: 15px;
+}
+
+.welcome-links .link {
+  color: var(--muted);
+}
+
+.welcome-links .link:hover {
+  color: var(--accent);
 }
 
 .welcome-watching {
@@ -2700,6 +2708,13 @@ h3 {
   background: var(--bad); color: #fff;
 }
 .brow-check { flex: none; display: inline-flex; color: var(--good); }
+/* Mouse: clicking a row folds it, so the details are one small button away. */
+.brow-info {
+  flex: none; display: inline-grid; place-items: center; width: 0; height: 1.7em; padding: 0; overflow: hidden;
+  border: 0; border-radius: 50%; background: none; color: var(--faint); cursor: pointer; opacity: 0;
+}
+.brow:hover .brow-info { width: 1.7em; opacity: 1; }
+.brow-info:hover { background: var(--panel-3); color: var(--text); }
 
 /* Red is the only filled row; amber (a built-in check fired) just colors the number. */
 .brow.bad { background: var(--bad-weak); }
@@ -2926,3 +2941,43 @@ h3 {
   .g-row.info-row { grid-template-columns: 12px minmax(0, 1fr); }
   .info-sum { grid-column: 2; }
 }
+
+/* ---------- Library: what the open match is compared against ---------- */
+.lib-base {
+  margin: 0 10px 8px; padding: 10px 12px;
+  border-radius: 10px; background: var(--panel-2);
+  font-size: 12.5px; color: var(--muted); line-height: 1.45;
+}
+.lib-base p { margin: 4px 0 0; }
+.lib-base b { color: var(--text); font-weight: 650; }
+.lib-base-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.lib-base-label { font-size: 11px; font-weight: 750; letter-spacing: 0.12em; text-transform: uppercase; color: var(--faint); }
+.lib-base .link { font-size: 12.5px; }
+.lib-base-skipped { margin-top: 8px; }
+.lib-base-skipped summary { cursor: pointer; color: var(--faint); }
+.lib-base-skipped summary:hover { color: var(--text); }
+.lib-base-skipped ul { list-style: none; margin: 6px 0 0; padding: 0; max-height: 180px; overflow: auto; }
+.lib-base-skipped li { display: flex; flex-direction: column; padding: 4px 0; border-top: 1px solid var(--border); }
+.lib-base-skipped li .mono { color: var(--text); font-size: 11.5px; }
+
+.lib-tag {
+  display: inline-block; margin-left: 8px; padding: 1px 7px; border-radius: 10px;
+  background: var(--accent-weak); color: var(--accent);
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.02em; vertical-align: 1px;
+}
+.lib-row.in-baseline:not(.selected) { box-shadow: inset 2px 0 0 var(--accent); }
+.lib-file { grid-column: 2 / 4; display: flex; justify-content: space-between; gap: 8px; font-size: 11.5px; color: var(--muted); overflow: hidden; }
+.lib-file span { flex: none; color: var(--faint); }
+
+/* The little "what is this?" popup on Board rows */
+.info-pop {
+  position: fixed; z-index: 80; padding: 12px 14px;
+  background: var(--panel); border: 1px solid var(--border-strong); border-radius: 12px; box-shadow: var(--shadow-lg);
+  font-size: 13px; line-height: 1.5; color: var(--muted);
+}
+.info-pop b { display: block; color: var(--text); font-size: 13px; }
+.info-pop p { margin: 4px 0 0; }
+
+/* Less clutter: top-level subtitles show on hover or when selected */
+.brow.d0 .brow-sub { display: none; }
+.brow.d0:hover .brow-sub, .brow.d0.sel .brow-sub { display: inline; }

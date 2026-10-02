@@ -46,7 +46,7 @@ const POLL_MS = 2000;
 const LIVE_SUMMARY_MIN_MS = 10000;
 const SAMPLE_NAME = '2026_05_16 11_38_21 Sat';
 /** Bump when LogSummary gains fields, so cached summaries are recomputed. */
-const SUMMARY_VERSION = 2;
+const SUMMARY_VERSION = 3;
 
 function savedRef(meta: SavedMeta): FileRef {
   return {

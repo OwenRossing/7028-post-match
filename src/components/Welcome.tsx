@@ -54,24 +54,22 @@ export function Welcome({ library, recent, onOpenFiles, onOpen, onSample, onLate
           </span>
         ) : folder.status === 'needs-permission' ? (
           <button className="link" onClick={() => library.reconnectFolder()}>
-            Reconnect the DS folder
+            Reconnect DS folder
           </button>
         ) : folderSupported() ? (
           <button className="link" onClick={() => library.connectFolder()} title={DS_LOG_PATH}>
-            Watch the Driver Station folder
+            Watch DS folder
           </button>
         ) : null}
-        {latest ? (
+        {latest && (
           <button className="link" onClick={onOpenFiles}>
-            Open other files
-          </button>
-        ) : (
-          <button className="link" onClick={onSample}>
-            Try a sample match
+            Open files
           </button>
         )}
+        <button className="link" onClick={onSample}>
+          Sample match
+        </button>
       </div>
-      {latest && <p className="welcome-hint">You can also drop .dslog files anywhere on this page.</p>}
 
       {others.length > 0 && (
         <section className="welcome-recent">
@@ -90,7 +88,7 @@ export function Welcome({ library, recent, onOpenFiles, onOpen, onSample, onLate
           </ul>
         </section>
       )}
-      <KeyBar fixed tabs={false} keys={[...(latest ? ([['L', 'latest match']] as [string, string][]) : []), ['O', 'open files'], ['S', 'your logs'], ['D', 'light / dark']]} />
+      <KeyBar fixed tabs={false} keys={[...(latest ? ([['L', 'latest match']] as [string, string][]) : []), ['O', 'open files'], ['S', 'your logs']]} />
     </div>
   );
 }
