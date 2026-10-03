@@ -1,8 +1,10 @@
 // A short plain-text summary of how a match was read, to paste into a bug report instead of sending the log.
 // Only numbers the app decoded (and one raw record), never the log's messages.
 
+import type { ExtraInfo } from './extras';
 import type { LogEntry } from './library';
 import { fmtSpan } from './time';
+import { matchLabel } from './wpilog';
 import type { ParsedLog } from './workerClient';
 
 const hex = (bytes: number[]) => bytes.map((b) => b.toString(16).padStart(2, '0')).join(' ');
@@ -20,6 +22,33 @@ function stats(arr: ArrayLike<number>): { peak: number; mean: number; n: number 
     n++;
   }
   return { peak: n ? peak : NaN, mean: n ? sum / n : NaN, n };
+}
+
+/**
+ * What is inside robot logs, for working out how to read and chart them: who wrote each, whether it has a clock and
+ * the field's name for the match, how it lined up, and every signal with its type, record count and what the logger
+ * said about it. Signal names are your robot's own; console messages are not included.
+ */
+export function robotLogDiagnostics(infos: ExtraInfo[], maxSignals = 400): string {
+  const out: string[] = [];
+  for (const x of infos) {
+    if (!x.ok) {
+      out.push(`robot log ${x.name} (${x.size} bytes): unreadable: ${x.error}`);
+      continue;
+    }
+    const a = x.anchors;
+    out.push(`robot log ${x.name}: ${x.role} · ${(x.size / 1e6).toFixed(1)} MB · ${fmtSpan(x.duration ?? 0)} · ${x.truncated ? 'still being written' : 'complete'}`);
+    out.push(
+      `  robot clock: ${a?.clockOffset != null ? `yes, starts ${x.clock ? new Date(x.clock.start * 1000).toISOString() : '?'}` : 'none'} · field match name: ${
+        a?.ids.length ? a.ids.map((i) => `${matchLabel(i)}${i.event ? ` (${i.event})` : ''}`).join(', ') : 'none'
+      } · enabled periods: ${a?.enabled.length ?? 0}${a?.enabled.length ? ` (first ${a.enabled[0].start.toFixed(1)}–${a.enabled[0].end.toFixed(1)} s)` : ''} · console lines: ${x.consoleLines ?? 0}`,
+    );
+    out.push(`  lined up with the match: ${x.alignment ? `${x.alignment.confidence}${x.alignment.method ? ` by ${x.alignment.method}` : ''}. ${x.alignment.detail}` : 'not checked'}`);
+    const sig = x.signals ?? [];
+    out.push(`  ${sig.length} signals (name | type | records | metadata)${sig.length > maxSignals ? `, first ${maxSignals}` : ''}:`);
+    for (const s of sig.slice(0, maxSignals)) out.push(`  ${s.name} | ${s.type} | ${s.count}${s.metadata ? ` | ${s.metadata}` : ''}`);
+  }
+  return out.join('\n');
 }
 
 export function diagnosticsText(entry: LogEntry, parsed: ParsedLog): string {
@@ -64,8 +93,7 @@ export function diagnosticsText(entry: LogEntry, parsed: ParsedLog): string {
       `.dsevents: ${events.events.length} messages (${count('error')} errors, ${count('warning')} warnings) · DS ${events.meta.dsVersion ?? '?'} · team ${events.meta.team ?? '?'} · ${events.meta.eventName ?? 'no event name'}`,
     );
   }
-  for (const x of parsed.extras)
-    out.push(`robot log ${x.name}: ${x.ok ? `${x.role} · ${x.signals?.length ?? 0} signals · ${x.alignment ? `${x.alignment.confidence} (${x.alignment.method ?? 'none'})` : 'not lined up'}` : `unreadable: ${x.error}`}`);
+  if (parsed.extras.length) out.push(robotLogDiagnostics(parsed.extras));
   for (const w of parsed.warnings) out.push(`warning: ${w}`);
   return out.join('\n');
 }

@@ -9,6 +9,8 @@ export interface ExtraSignal {
   type: string;
   kind: WPILogKind;
   count: number;
+  /** What the logger said about the signal (units, source), shortened. */
+  metadata?: string;
 }
 
 export interface ExtraInfo {
@@ -58,7 +60,7 @@ function describe(name: string, kind: ExtraKind, size: number, w: WPILog, ds: Ds
     truncated: w.truncated,
     consoleLines: w.text.get('messages')?.length,
     signals: w.entries
-      .map((e) => ({ name: e.name, type: e.type, kind: e.kind, count: e.count }))
+      .map((e) => ({ name: e.name, type: e.type, kind: e.kind, count: e.count, metadata: e.metadata ? e.metadata.slice(0, 160) : undefined }))
       .sort((a, b) => a.name.localeCompare(b.name)),
   };
   const clock = clockSpan(w);

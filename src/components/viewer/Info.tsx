@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { diagnosticsText } from '../../lib/diagnostics';
+import { diagnosticsText, robotLogDiagnostics } from '../../lib/diagnostics';
 import { fmtDateTime, fmtSpan } from '../../lib/time';
+import { CopyDiagnostics } from './CopyDiagnostics';
 import { RobotLogCard, robotSummary } from './RobotLogCard';
 import type { ViewCtx } from './types';
 
@@ -170,6 +171,13 @@ export function Info({ ctx }: { ctx: ViewCtx }) {
           </div>
         </>
       ),
+      extra: parsed.extras.length ? (
+        <CopyDiagnostics
+          build={() => robotLogDiagnostics(parsed.extras)}
+          label="Copy robot log diagnostics"
+          note="Every signal in the robot logs, with its type and units, and how they lined up. Paste it when a robot log looks wrong or you want a signal charted."
+        />
+      ) : undefined,
     },
     {
       id: 'files',
@@ -271,32 +279,6 @@ export function Info({ ctx }: { ctx: ViewCtx }) {
           })}
         </section>
       </div>
-    </div>
-  );
-}
-
-/** Puts a short text summary of how this log was read on the clipboard, to paste into a bug report instead of sending the file. */
-function CopyDiagnostics({ build }: { build: () => string }) {
-  const [state, setState] = useState<'idle' | 'copied' | 'show'>('idle');
-  const [text, setText] = useState('');
-  const copy = async () => {
-    const t = build();
-    setText(t);
-    try {
-      await navigator.clipboard.writeText(t);
-      setState('copied');
-      setTimeout(() => setState('idle'), 5000);
-    } catch {
-      setState('show'); // the browser refused: show it to copy by hand
-    }
-  };
-  return (
-    <div className="info-actions">
-      <button className="btn small" onClick={copy}>
-        {state === 'copied' ? 'Copied. Paste it in the chat.' : 'Copy diagnostics'}
-      </button>
-      <p className="muted info-empty">A short summary of how this log was read (numbers only, no messages), to paste when something looks wrong.</p>
-      {state === 'show' && <textarea className="diag" readOnly rows={10} value={text} onFocus={(e) => e.currentTarget.select()} />}
     </div>
   );
 }
