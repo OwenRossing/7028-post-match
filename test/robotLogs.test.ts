@@ -172,6 +172,64 @@ describe('RobotLogStore', () => {
     expect(b.extrasFor('robot:x.hoot')![0]).toMatchObject({ kind: 'hoot', decoded: false, hoot: { size: 80_000_000 } });
   });
 
+  describe('logs from the robot-log folder', () => {
+    const remote = (name: string, remoteId: string, a = anchors(DS_START, 100)): ExtraFile => ({ kind: 'wpilog', file: ref(name), role: 'CTRE Phoenix', anchors: a, remote: true, remoteId });
+
+    it('are not saved, and neither is a robot match made only of them', async () => {
+      const db = fakeDb();
+      const s = new RobotLogStore(db);
+      s.add('q22', remote('a.hoot', 'id1:default'));
+      s.add('q22', extra('own.wpilog', anchors(DS_START, 100)));
+      s.addRobotMatch('robot:b.hoot', { startTime: 1, title: 'Robot log b' });
+      s.add('robot:b.hoot', remote('b.hoot', 'id2:default'));
+      await s.save();
+      const b = new RobotLogStore(db);
+      await b.load();
+      expect(b.extrasFor('q22')!.map((x) => x.file.name)).toEqual(['own.wpilog']); // read from the folder again next visit
+      expect(b.isRobotMatch('robot:b.hoot')).toBe(false);
+      expect(b.extrasFor('robot:b.hoot')).toBeUndefined();
+    });
+
+    it('go when their file goes or changes, and a robot match left empty goes with them', () => {
+      const s = new RobotLogStore(fakeDb());
+      s.add('q22', remote('a.hoot', 'id1:default'));
+      s.addRobotMatch('robot:b.hoot', { startTime: 1, title: 'x' });
+      s.add('robot:b.hoot', remote('b.hoot', 'id2:default'));
+      s.add('q22', extra('own.wpilog', anchors(DS_START, 100)));
+      expect(s.hasRemote('id1:default')).toBe(true);
+      // b.hoot changed (a new version has a new id) and a.hoot is unchanged
+      expect(s.removeRemoteExcept(new Set(['id1:default', 'id2b:default']))).toBe(true);
+      expect(s.hasRemote('id2:default')).toBe(false);
+      expect(s.isRobotMatch('robot:b.hoot')).toBe(false);
+      expect(s.hasRemote('id1:default')).toBe(true);
+      expect(s.extrasFor('q22')!.map((x) => x.file.name)).toEqual(['a.hoot', 'own.wpilog']); // logs added by hand are never touched
+      expect(s.removeRemoteExcept(new Set(['id1:default']))).toBe(false);
+    });
+
+    it('stay hidden once removed, until the user asks to see them again', async () => {
+      const db = fakeDb();
+      const s = new RobotLogStore(db);
+      s.add('q22', remote('a.hoot', 'id1:default'));
+      s.remove('q22', 'a.hoot');
+      expect(s.isDismissed('a.hoot', 'remote')).toBe(true);
+      expect(s.hiddenRemote()).toBe(1);
+      await s.save();
+      const b = new RobotLogStore(db);
+      await b.load();
+      expect(b.isDismissed('a.hoot', 'remote')).toBe(true); // still hidden next visit
+      b.showHiddenRemote();
+      expect(b.isDismissed('a.hoot', 'remote')).toBe(false);
+      expect(b.hiddenRemote()).toBe(0);
+    });
+
+    it('removing a log added by hand does not hide anything from the folder', () => {
+      const s = new RobotLogStore(fakeDb());
+      s.add('q22', extra('own.wpilog', anchors(DS_START, 100)));
+      s.remove('q22', 'own.wpilog');
+      expect(s.isDismissed('own.wpilog', 'remote')).toBe(false);
+    });
+  });
+
   it('does not save what it was told to skip, and frees files nothing uses any more', async () => {
     const db = fakeDb();
     const s = new RobotLogStore(db);

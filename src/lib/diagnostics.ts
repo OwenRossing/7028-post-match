@@ -48,6 +48,7 @@ export function robotLogDiagnostics(infos: ExtraInfo[], maxSignals = 400): strin
         a?.ids.length ? a.ids.map((i) => `${matchLabel(i)}${i.event ? ` (${i.event})` : ''}`).join(', ') : 'none'
       } · enabled periods: ${a?.enabled.length ?? 0}${a?.enabled.length ? ` (first ${a.enabled[0].start.toFixed(1)}–${a.enabled[0].end.toFixed(1)} s)` : ''} · console lines: ${x.consoleLines ?? 0}`,
     );
+    if (x.note) out.push(...x.note.split('\n').map((l) => `  ${l}`));
     out.push(`  lined up with the match: ${x.alignment ? `${x.alignment.confidence}${x.alignment.method ? ` by ${x.alignment.method}` : ''}. ${x.alignment.detail}` : 'not checked'}`);
     const sig = x.signals ?? [];
     out.push(`  ${sig.length} signals (name | type | records | metadata)${sig.length > maxSignals ? `, first ${maxSignals}` : ''}:`);

@@ -21,6 +21,8 @@ export interface ExtraPayload {
   data: ArrayBuffer;
   /** For a .hoot already described when it was added: the description, with `data` left empty. */
   hoot?: HootProbe;
+  /** Overrides what the card says about a .hoot (why it could not be converted). */
+  note?: string;
 }
 
 export interface WorkerRequest {

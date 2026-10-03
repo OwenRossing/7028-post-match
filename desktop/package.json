@@ -1,0 +1,55 @@
+{
+  "name": "pitview-desktop",
+  "productName": "PitView",
+  "version": "1.0.0",
+  "private": true,
+  "description": "PitView desktop app: the log viewer with a built-in engine that watches the Driver Station and robot log folders and runs CTRE's Owlet on .hoot files",
+  "author": "Team 7028",
+  "main": "main.cjs",
+  "scripts": {
+    "app": "node prepare.mjs",
+    "start": "node prepare.mjs && electron .",
+    "dist": "node prepare.mjs && electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^44.5.1",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "org.team7028.pitview",
+    "productName": "PitView",
+    "asar": false,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "app/**/*",
+      "package.json"
+    ],
+    "artifactName": "PitView-${version}-${os}-${arch}.${ext}",
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "artifactName": "PitView-Setup-${version}.${ext}"
+    },
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.utilities"
+    },
+    "linux": {
+      "target": "AppImage",
+      "category": "Utility"
+    },
+    "portable": {
+      "artifactName": "PitView-Portable-${version}.${ext}"
+    }
+  }
+}

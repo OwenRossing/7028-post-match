@@ -29,6 +29,12 @@ export interface ExtraFile {
   decoded?: boolean;
   /** For a .hoot: what it looked like when it was added, so the file need not be read again. */
   hoot?: HootProbe;
+  /** Comes from the companion's robot-log folder: read from there each time, never saved in the browser, and added again by itself next visit. */
+  remote?: boolean;
+  /** Which version of which file in that folder (changes when the file changes or finishes converting). */
+  remoteId?: string;
+  /** Shown on the log's card instead of the default (why a .hoot could not be converted). */
+  note?: string;
 }
 
 /**
@@ -93,6 +99,13 @@ export function fileRefFromFile(file: File): FileRef {
 
 const fileSig = (r?: FileRef) => (r ? `${r.size}@${r.mtime}` : '-');
 
+/** A short stand-in for a piece of text, to tell two versions of it apart in a key. */
+export function shortHash(s: string): string {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
+}
+
 /** Identifies the Driver Station files of an entry (changes when a live log grows). Library summaries are keyed by this. */
 export function summaryKeyOf(e: LogEntry): string {
   return `${e.key}|${fileSig(e.dslog)}|${fileSig(e.dsevents)}`;
@@ -100,7 +113,9 @@ export function summaryKeyOf(e: LogEntry): string {
 
 /** Identifies everything read for an entry: the DS files and every attached log. Parsed data is cached under this. */
 export function versionKey(e: LogEntry): string {
-  const x = (e.extras ?? []).map((a) => `${a.file.name}:${fileSig(a.file)}`).join(',');
+  // a log from the robot-log folder keeps its name, size and time while it goes from waiting to failed to converted:
+  // the version of the file it stands for and the note on its card tell those apart
+  const x = (e.extras ?? []).map((a) => `${a.file.name}:${fileSig(a.file)}${a.remoteId ? `@${a.remoteId}` : ''}${a.note ? `#${shortHash(a.note)}` : ''}`).join(',');
   return x ? `${summaryKeyOf(e)}|${x}` : summaryKeyOf(e);
 }
 

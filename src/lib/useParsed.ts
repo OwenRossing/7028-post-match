@@ -16,7 +16,7 @@ export function loadParsed(entry: LogEntry): Promise<ParsedLog> {
         // a .hoot that was described when it was added is not read again
         Promise.all(
           (entry.extras ?? []).map(async (e) =>
-            e.kind === 'hoot' && e.hoot ? { name: e.file.name, kind: e.kind, data: new ArrayBuffer(0), hoot: e.hoot } : { name: e.file.name, kind: e.kind, data: await e.file.read() },
+            e.kind === 'hoot' && e.hoot ? { name: e.file.name, kind: e.kind, data: new ArrayBuffer(0), hoot: e.hoot, note: e.note } : { name: e.file.name, kind: e.kind, data: await e.file.read(), note: e.note },
           ),
         ),
       ]);

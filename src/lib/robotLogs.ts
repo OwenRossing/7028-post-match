@@ -73,7 +73,10 @@ export class RobotLogStore {
       const inUse = new Set<string>();
       for (const [key, list] of this.attached) {
         if (skip(key)) continue;
-        out[key] = list.map((x) => ({
+        // logs from the robot-log folder are read from there again next visit: nothing of them is saved
+        const own = list.filter((x) => !x.remote);
+        if (!own.length) continue;
+        out[key] = own.map((x) => ({
           kind: x.kind,
           name: x.file.name,
           size: x.file.size,
@@ -84,10 +87,10 @@ export class RobotLogStore {
           decoded: x.decoded,
           hoot: x.hoot,
         }));
-        list.forEach((x) => inUse.add(x.file.name));
+        own.forEach((x) => inUse.add(x.file.name));
       }
       await this.db.set('kv', 'attachments', out);
-      await this.db.set('kv', 'robotMatches', Object.fromEntries(this.matches));
+      await this.db.set('kv', 'robotMatches', Object.fromEntries([...this.matches].filter(([key]) => out[key])));
       await this.db.set('kv', 'dismissed', [...this.dismissed]);
       for (const name of dropped) if (!inUse.has(name)) await this.db.del('files', name);
     } catch {
@@ -134,6 +137,37 @@ export class RobotLogStore {
     return [...seen.values()];
   }
 
+  /** Whether a version of a file from the robot-log folder is attached anywhere. */
+  hasRemote(remoteId: string): boolean {
+    for (const list of this.attached.values()) if (list.some((x) => x.remote && x.remoteId === remoteId)) return true;
+    return false;
+  }
+
+  /** Takes off every robot-folder log whose version is not in `keep` (the file is gone or has changed). Returns whether anything went. */
+  removeRemoteExcept(keep: Set<string>): boolean {
+    let changed = false;
+    for (const [key, list] of [...this.attached]) {
+      const rest = list.filter((x) => !x.remote || keep.has(x.remoteId ?? ''));
+      if (rest.length === list.length) continue;
+      changed = true;
+      if (rest.length) this.attached.set(key, rest);
+      else {
+        this.attached.delete(key);
+        this.matches.delete(key);
+      }
+    }
+    return changed;
+  }
+
+  /** Robot-folder logs the user has hidden with Remove. */
+  hiddenRemote(): number {
+    return [...this.dismissed].filter((d) => d.endsWith('@remote')).length;
+  }
+
+  showHiddenRemote(): void {
+    for (const d of [...this.dismissed]) if (d.endsWith('@remote')) this.dismissed.delete(d);
+  }
+
   /** Where `name` is attached. */
   keysOf(name: string): string[] {
     return [...this.attached].filter(([, l]) => l.some((x) => x.file.name === name)).map(([k]) => k);
@@ -155,6 +189,9 @@ export class RobotLogStore {
 
   /** Takes a log off a match, by hand: it will not be put back automatically. A robot match left with no logs goes away. */
   remove(key: string, name: string): void {
+    const removed = (this.attached.get(key) ?? []).find((x) => x.file.name === name);
+    // a log from the robot-log folder would otherwise come straight back next time the folder is read
+    if (removed?.remote) this.dismissed.add(`${name}@remote`);
     const rest = (this.attached.get(key) ?? []).filter((x) => x.file.name !== name);
     if (rest.length) this.attached.set(key, rest);
     else {

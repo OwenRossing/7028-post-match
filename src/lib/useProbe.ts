@@ -15,7 +15,7 @@ export function useProbe(entry: LogEntry): ExtraInfo[] | null {
     if (!p) {
       p = Promise.all(
         (entry.extras ?? []).map(async (x) =>
-          x.kind === 'hoot' && x.hoot ? { name: x.file.name, kind: x.kind, data: new ArrayBuffer(0), hoot: x.hoot } : { name: x.file.name, kind: x.kind, data: await x.file.read() },
+          x.kind === 'hoot' && x.hoot ? { name: x.file.name, kind: x.kind, data: new ArrayBuffer(0), hoot: x.hoot, note: x.note } : { name: x.file.name, kind: x.kind, data: await x.file.read(), note: x.note },
         ),
       ).then(probeExtras);
       cache.set(key, p);

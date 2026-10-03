@@ -59,7 +59,7 @@ export function logRole(w: WPILog): string {
   return 'Robot log';
 }
 
-function describe(name: string, kind: ExtraKind, size: number, w: WPILog, ds: DsAnchor | null): ExtraInfo {
+function describe(name: string, kind: ExtraKind, size: number, w: WPILog, ds: DsAnchor | null, note?: string): ExtraInfo {
   const info: ExtraInfo = {
     name,
     kind,
@@ -68,6 +68,7 @@ function describe(name: string, kind: ExtraKind, size: number, w: WPILog, ds: Ds
     role: logRole(w),
     duration: Math.max(0, w.last - w.first),
     truncated: w.truncated,
+    note,
     consoleLines: w.text.get('messages')?.length,
     signals: w.entries
       .map((e) => ({ name: e.name, type: e.type, kind: e.kind, count: e.count, metadata: e.metadata ? e.metadata.slice(0, 160) : undefined }))
@@ -88,7 +89,7 @@ function describe(name: string, kind: ExtraKind, size: number, w: WPILog, ds: Ds
  * Reads one attached log. `ds` is what to line it up against; leave it out to only look inside the file. A .hoot is
  * only described (see hoot.ts); `known` is its description from when it was added, so the file need not be read again.
  */
-export function describeExtra(name: string, kind: ExtraKind, bytes: ArrayBuffer, ds: DsAnchor | null, known?: HootProbe): ExtraInfo {
+export function describeExtra(name: string, kind: ExtraKind, bytes: ArrayBuffer, ds: DsAnchor | null, known?: HootProbe, note?: string): ExtraInfo {
   if (kind === 'hoot') {
     const probe = known ?? probeHoot(new Uint8Array(bytes), name);
     return {
@@ -98,7 +99,7 @@ export function describeExtra(name: string, kind: ExtraKind, bytes: ArrayBuffer,
       ok: true,
       decoded: false,
       role: 'CTRE Phoenix',
-      note: HOOT_NOTE,
+      note: note ?? HOOT_NOTE,
       hoot: probe,
       // all there is to place it by is the match CTRE put in the name, if it did
       anchors: { first: 0, last: 0, enabled: [], lines: [], ids: probe.name.ids },
@@ -109,7 +110,7 @@ export function describeExtra(name: string, kind: ExtraKind, bytes: ArrayBuffer,
   const u8 = new Uint8Array(bytes);
   if (!isWPILog(u8)) return { name, kind, size, ok: false, error: 'This is not a WPILib data log: it does not start with "WPILOG".' };
   try {
-    return describe(name, kind, size, parseWPILog(u8, { keep: keepAnchors }), ds);
+    return describe(name, kind, size, parseWPILog(u8, { keep: keepAnchors }), ds, note);
   } catch (err) {
     return { name, kind, size, ok: false, error: String((err as Error).message ?? err) };
   }

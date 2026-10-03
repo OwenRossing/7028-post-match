@@ -3,7 +3,9 @@ import { DS_LOG_PATH } from '../lib/folder';
 import { updateSettings, type Settings } from '../lib/settings';
 import type { ThemePref } from '../lib/theme';
 import type { Library } from '../lib/useLibrary';
+import { desktopBridge } from '../lib/desktop';
 import { Icon } from './Icon';
+import { DesktopMenu, RobotStatus } from './RobotMenu';
 import { Scrim } from './Scrim';
 
 interface Props {
@@ -31,6 +33,7 @@ export function TopBar({ library, settings, onOpenFiles, onLatestMatch, onHelp, 
   const [url, setUrl] = useState(settings.companionUrl);
   const { folder, companion } = library;
   const watching = folder.status === 'connected' || companion.status === 'connected';
+  const bridge = desktopBridge();
 
   return (
     <header className={`topbar ${viewing ? 'viewing' : ''}`}>
@@ -73,6 +76,10 @@ export function TopBar({ library, settings, onOpenFiles, onLatestMatch, onHelp, 
           <>
             <Scrim onClose={() => setMenu(false)} />
             <div className="menu" style={{ width: 330 }}>
+              {bridge ? (
+                <DesktopMenu bridge={bridge} robot={library.robot} hidden={library.hiddenRobotLogs} onShowHidden={() => void library.showHiddenRobotLogs()} />
+              ) : (
+                <>
               <div className="menu-label">Driver Station</div>
               {folder.status === 'connected' ? (
                 <>
@@ -109,6 +116,8 @@ export function TopBar({ library, settings, onOpenFiles, onLatestMatch, onHelp, 
               ) : (
                 <div className="menu-note">Watching a folder needs Chrome or Edge. You can still drop files anywhere on the page.</div>
               )}
+                </>
+              )}
               <label className="item">
                 <input type="checkbox" checked={settings.autoFollow} onChange={(e) => updateSettings({ autoFollow: e.target.checked })} />
                 <span>
@@ -116,6 +125,8 @@ export function TopBar({ library, settings, onOpenFiles, onLatestMatch, onHelp, 
                   <small>Jump to each match as the DS records it</small>
                 </span>
               </label>
+              {!bridge && (
+                <>
               {companion.status === 'connected' ? (
                 <>
                   <div className="menu-note">
@@ -151,6 +162,11 @@ export function TopBar({ library, settings, onOpenFiles, onLatestMatch, onHelp, 
                     {companion.status === 'error' && <div style={{ color: 'var(--bad)', marginTop: 6 }}>{companion.error}</div>}
                   </form>
                 </details>
+              )}
+                  {companion.status === 'connected' && (
+                    <RobotStatus robot={library.robot} hidden={library.hiddenRobotLogs} onShowHidden={() => void library.showHiddenRobotLogs()} />
+                  )}
+                </>
               )}
               <hr />
               <div className="menu-label">Appearance</div>

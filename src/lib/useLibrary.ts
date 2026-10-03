@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { LogSummary } from './analysis';
-import { listCompanion, probeCompanion, watchCompanion, type CompanionInfo } from './companion';
+import { convertedNote, listCompanion, listRobot, probeCompanion, robotRef, watchCompanion, type CompanionInfo, type RobotItem, type RobotListing } from './companion';
 import {
   folderSupported,
   forgetFolder,
@@ -11,7 +11,8 @@ import {
   scanFolder,
 } from './folder';
 import { idb } from './idb';
-import { planPlacements, robotMatchTitle } from './aggregate';
+import { planPlacements, robotMatchTitle, type RioAnchors } from './aggregate';
+import type { HootProbe } from './hoot';
 import {
   candidateOf,
   fileKind,
@@ -19,7 +20,9 @@ import {
   hasDS,
   mergeEntries,
   pairFiles,
+  shortHash,
   summaryKeyOf,
+  type ExtraKind,
   type FileRef,
   type LogEntry,
   type SourceKind,
@@ -45,6 +48,15 @@ interface SavedMeta {
   name: string;
   size: number;
   mtime: number;
+}
+
+/** What is remembered about a robot-folder file so it need not be read again next visit. */
+interface CachedProbe {
+  role?: string;
+  anchors: RioAnchors;
+  startUnix?: number;
+  decoded?: boolean;
+  hoot?: HootProbe;
 }
 
 /** What happened to files offered to `attachExtras`. */
@@ -157,6 +169,13 @@ export function useLibrary(opts: {
 
   const skipSaving = (key: string) => entriesRef.current.get(key)?.source === 'sample'; // the sample is not saved, so nothing attached to it is either
 
+  /** A match dropped together with its robot log is still being read, and its length is needed to place the log. */
+  const waitForIndexing = useCallback(async () => {
+    const deadline = Date.now() + 8000;
+    const reading = () => [...entriesRef.current.values()].some((e) => hasDS(e) && e.summaryKey !== summaryKeyOf(e) && !e.summaryError);
+    while (reading() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 150));
+  }, []);
+
   /**
    * Adds roboRIO / CTRE logs. With a `target` they all go to that match. Without one, each log goes to the matches it
    * fits (the field's own name for the match, the two clocks, or what happened); a log that fits none starts a new
@@ -173,12 +192,7 @@ export function useLibrary(opts: {
         wanted.map(async (f) => ({ name: f.name, kind: fileKind(f.name) === 'hoot' ? ('hoot' as const) : ('wpilog' as const), data: await f.arrayBuffer() })),
       );
       const probed = await probeExtras(payloads.map((p) => ({ ...p, data: p.data.slice(0) })));
-      if (!target) {
-        // a match dropped together with its robot log is still being read, and its length is needed to place the log
-        const deadline = Date.now() + 8000;
-        const reading = () => [...entriesRef.current.values()].some((e) => hasDS(e) && e.summaryKey !== summaryKeyOf(e) && !e.summaryError);
-        while (reading() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 150));
-      }
+      if (!target) await waitForIndexing();
 
       const saved = getSettings().persistUploads;
       for (const [i, f] of wanted.entries()) {
@@ -228,8 +242,125 @@ export function useLibrary(opts: {
       if (saved) await store.save(skipSaving);
       return result;
     },
-    [setEntries, store],
+    [setEntries, store, waitForIndexing],
   );
+
+  // ---------- Robot logs from the companion's robot-log folder ----------
+
+  const [robot, setRobot] = useState<RobotListing | null>(null);
+  const companionUrl = useRef<string | null>(null);
+  const robotBusy = useRef(false);
+  const robotAgain = useRef(false);
+  const robotSeen = useRef(new Set<string>()); // progress and failures already reported
+  const robotBad = useRef(new Set<string>()); // files that could not be read: not tried again
+
+  /** Which version of a listed file to attach: the converted .wpilog, or the original of a hoot that could not be converted. */
+  // The id says which version and why: a hoot that failed is a different thing to show than one still waiting for Owlet,
+  // or one that failed for another reason, and each must replace the last.
+  const wantOf = (i: RobotItem): string | null =>
+    i.state === 'ready'
+      ? `${i.id}:default`
+      : i.kind === 'hoot' && (i.state === 'failed' || i.state === 'needs-owlet')
+        ? `${i.id}:source:${i.state}${i.error ? `:${shortHash(i.error)}` : ''}`
+        : null;
+
+  const attachRemote = useCallback(
+    async (url: string, item: RobotItem, remoteId: string) => {
+      const which = remoteId.includes(':source') ? 'source' : 'default';
+      const kind: ExtraKind = which === 'source' ? 'hoot' : 'wpilog';
+      const file = robotRef(url, item, which);
+      // what the file looks like does not depend on why it is shown, so one description per file and version
+      const probeKey = `probe|${item.id}:${which}|1`;
+      let info = await idb.get<CachedProbe>('summaries', probeKey);
+      if (!info) {
+        const data = await file.read();
+        const [r] = await probeExtras([{ name: item.name, kind, data }]);
+        if (!r?.ok || !r.anchors) {
+          robotBad.current.add(remoteId);
+          optsRef.current.onError(`Couldn't read ${item.name}`, r?.error ?? 'The file could not be read.');
+          return;
+        }
+        info = { role: r.role, anchors: r.anchors, startUnix: r.startUnix, decoded: r.decoded, hoot: r.hoot };
+        await idb.set('summaries', probeKey, info).catch(() => undefined);
+      }
+      const note =
+        item.state === 'failed'
+          ? `Owlet couldn't convert this .hoot: ${item.error ?? 'no reason given'}`
+          : item.state === 'needs-owlet'
+            ? "This .hoot is waiting for Owlet, which wasn't found. Locate it from the ⋯ menu and it converts by itself."
+            : convertedNote(item);
+      const extra = { kind, file, role: info.role, anchors: info.anchors, startUnix: info.startUnix ?? item.mtime / 1000, decoded: info.decoded, hoot: info.hoot, remote: true, remoteId, note };
+      const entries = [...entriesRef.current.values()];
+      const cands = [...entries.map(candidateOf), ...store.robotCandidates(entries)].filter((c) => !!c) as NonNullable<ReturnType<typeof candidateOf>>[];
+      let keys = planPlacements([{ name: item.name, anchors: info.anchors }], cands, () => false, (n, k) => store.isDismissed(n, k)).map((m) => m.key);
+      if (!keys.length) {
+        const key = robotKey(item.name);
+        store.addRobotMatch(key, { startTime: extra.startUnix, title: robotMatchTitle(info.anchors.ids, item.name) });
+        keys = [key];
+      }
+      for (const key of keys) store.add(key, extra);
+    },
+    [store],
+  );
+
+  /** Brings the library in line with the robot-log folder: new logs are attached, ones that went away or changed are taken off. */
+  const syncRobot = useCallback(
+    async (url: string) => {
+      if (robotBusy.current) {
+        robotAgain.current = true;
+        return;
+      }
+      robotBusy.current = true;
+      try {
+        do {
+          robotAgain.current = false;
+          const listing = await listRobot(url);
+          setRobot(listing);
+          if (!listing) break;
+          const keep = new Set(listing.items.map(wantOf).filter((w): w is string => !!w));
+          if (store.removeRemoteExcept(keep)) setEntries((cur) => new Map(cur));
+
+          for (const i of listing.items) {
+            const sig = `${i.id}:${i.state}${i.error ? `:${shortHash(i.error)}` : ''}`;
+            if (robotSeen.current.has(sig)) continue;
+            if (i.state === 'converting') optsRef.current.onInfo?.(`Converting ${i.name}`, 'Owlet is turning this .hoot into a .wpilog. It joins its match when it is done.');
+            else if (i.state === 'failed') optsRef.current.onError(`Owlet couldn't convert ${i.name}`, i.error ?? 'No reason given.');
+            else if (i.state === 'needs-owlet' && !robotSeen.current.has('needs-owlet')) {
+              robotSeen.current.add('needs-owlet');
+              optsRef.current.onInfo?.('Owlet not found', `${i.name} can't be converted until PitView knows where Owlet is. Use Locate Owlet in the ⋯ menu.`);
+            } else continue;
+            robotSeen.current.add(sig);
+          }
+
+          const todo = listing.items.filter((i) => {
+            const w = wantOf(i);
+            return w && !robotBad.current.has(w) && !store.hasRemote(w) && !store.isDismissed(i.name, 'remote');
+          });
+          if (!todo.length) continue;
+          await waitForIndexing();
+          for (const item of todo) {
+            try {
+              await attachRemote(url, item, wantOf(item)!);
+            } catch (err) {
+              robotBad.current.add(wantOf(item)!);
+              optsRef.current.onError(`Couldn't read ${item.name}`, String((err as Error).message ?? err));
+            }
+          }
+          setEntries((cur) => new Map(cur));
+        } while (robotAgain.current);
+      } finally {
+        robotBusy.current = false;
+      }
+    },
+    [store, setEntries, waitForIndexing, attachRemote],
+  );
+
+  /** Shows robot-folder logs the user hid with Remove. */
+  const showHiddenRobotLogs = useCallback(async () => {
+    store.showHiddenRemote();
+    await store.save(skipSaving);
+    if (companionUrl.current) void syncRobot(companionUrl.current);
+  }, [store, syncRobot]);
 
   /** Takes one attached log off a match. */
   const detachExtra = useCallback(
@@ -381,13 +512,14 @@ export function useLibrary(opts: {
   const refreshCompanion = useCallback(
     async (url: string, announce: boolean) => {
       const files = await listCompanion(url);
+      void syncRobot(url).catch(() => undefined);
       const sig = signature(files);
       if (sig === companionSig.current) return;
       const first = companionSig.current === '';
       companionSig.current = sig;
       syncSource('companion', files, announce && !first);
     },
-    [syncSource],
+    [syncSource, syncRobot],
   );
 
   const connectCompanion = useCallback(
@@ -400,6 +532,7 @@ export function useLibrary(opts: {
       }
       stopCompanion.current?.();
       companionSig.current = '';
+      companionUrl.current = url;
       setCompanion({ status: 'connected', url, info });
       try {
         await refreshCompanion(url, false);
@@ -427,9 +560,12 @@ export function useLibrary(opts: {
     stopCompanion.current?.();
     stopCompanion.current = null;
     companionSig.current = '';
+    companionUrl.current = null;
     setCompanion({ status: 'none' });
+    store.removeRemoteExcept(new Set());
+    setRobot(null);
     setEntries((cur) => new Map([...cur].filter(([, e]) => e.source !== 'companion')));
-  }, [setEntries]);
+  }, [setEntries, store]);
 
   // ---------- Startup ----------
 
@@ -514,6 +650,9 @@ export function useLibrary(opts: {
     addFiles,
     attachExtras,
     detachExtra,
+    robot,
+    hiddenRobotLogs: store.hiddenRemote(),
+    showHiddenRobotLogs,
     removeEntry,
     clearSaved,
     loadSample,

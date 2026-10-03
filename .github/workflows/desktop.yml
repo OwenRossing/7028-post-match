@@ -1,0 +1,58 @@
+name: Build desktop app
+
+# Builds the Windows installer and portable exe of the PitView desktop app (the viewer plus an engine that watches the
+# Driver Station and robot log folders and runs CTRE's Owlet on .hoot files). Run it from the Actions tab, or push a
+# tag named desktop-v1.2.3. The files go on the "desktop-latest" release (or the tag's own release).
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['desktop-v*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-build
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            desktop/package-lock.json
+      # The tests are not run here: they are checked on every push to master (deploy.yml), and some use shell scripts as stand-ins for Owlet.
+      - run: npm ci
+      - run: npm run build
+      - run: npm ci
+        working-directory: desktop
+      - run: node prepare.mjs
+        working-directory: desktop
+      - run: npx electron-builder --win --publish never
+        working-directory: desktop
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PitView-windows
+          path: |
+            desktop/release/*.exe
+          if-no-files-found: error
+      - name: Put the files on a release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then TAG="$GITHUB_REF_NAME"; else TAG="desktop-latest"; fi
+          NOTES="Built from commit ${GITHUB_SHA::7}. The app is not code-signed, so Windows SmartScreen asks once: More info, then Run anyway."
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --notes "$NOTES"
+          else
+            gh release create "$TAG" --prerelease --target "$GITHUB_SHA" --title "PitView desktop ($TAG)" --notes "$NOTES"
+          fi
+          gh release upload "$TAG" desktop/release/*.exe --clobber

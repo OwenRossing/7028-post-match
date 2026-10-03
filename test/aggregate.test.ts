@@ -244,6 +244,22 @@ describe('entries with attached logs', () => {
     expect(versionKey(bigger)).not.toBe(versionKey(withRio));
   });
 
+  it('re-reads a hoot when it goes from waiting to failed to converted, though its name, size and time never change', () => {
+    // a robot-folder hoot is described by the same FileRef whichever version of it is shown
+    const hoot = (remoteId: string, note?: string): LogEntry => ({
+      ...base,
+      extras: [{ kind: 'hoot', file: ref('Q22.hoot', 80_000_000, 5), remote: true, remoteId, note }],
+    });
+    const waiting = hoot('a1:source:needs-owlet', 'waiting for Owlet');
+    const failed = hoot('a1:source:failed:x1', 'Owlet said no');
+    const failedAgain = hoot('a1:source:failed:x2', 'Owlet said something else');
+    const converted = hoot('a1:default');
+    const keys = [waiting, failed, failedAgain, converted].map(versionKey);
+    expect(new Set(keys).size).toBe(4);
+    // and the same state reads the same, so the parse cache still works
+    expect(versionKey(hoot('a1:default'))).toBe(versionKey(converted));
+  });
+
   it('keeps attached logs when the DS side is rescanned', () => {
     const withRio: LogEntry = { ...base, extras: [{ kind: 'wpilog', file: ref('r.wpilog') }], summaryKey: summaryKeyOf(base) };
     const rescanned: LogEntry = { ...base, dslog: ref('m1.dslog', 11, 2) };

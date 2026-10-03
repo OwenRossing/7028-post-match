@@ -35,9 +35,10 @@ export function fmtDuration(sec: number, decimals = 1): string {
 /** Short human duration: "2m 34s", "45.2s", "1h 03m". */
 export function fmtSpan(sec: number): string {
   if (!Number.isFinite(sec)) return '–';
-  if (sec < 60) return `${sec < 10 ? sec.toFixed(1) : Math.round(sec)}s`;
-  const m = Math.floor(sec / 60);
-  if (m < 60) return `${m}m ${String(Math.round(sec - m * 60)).padStart(2, '0')}s`;
+  if (sec < 59.5) return `${sec < 10 ? sec.toFixed(1) : Math.round(sec)}s`;
+  const total = Math.round(sec); // carry first: 599.9 s is 10m 00s, not 9m 60s
+  const m = Math.floor(total / 60);
+  if (m < 60) return `${m}m ${String(total - m * 60).padStart(2, '0')}s`;
   const h = Math.floor(m / 60);
   return `${h}h ${String(m - h * 60).padStart(2, '0')}m`;
 }

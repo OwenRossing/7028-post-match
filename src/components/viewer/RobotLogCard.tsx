@@ -61,6 +61,11 @@ export function RobotLogCard({ info: x, onRemove, waiting = false }: { info: Ext
             </p>
           )}
           {x.truncated && <p className="robot-log-note muted">The robot was still writing this log: the last record is partly written.</p>}
+          {x.note?.split('\n').map((line, i) => (
+            <p key={i} className="robot-log-note muted">
+              {line}
+            </p>
+          ))}
           <details className="robot-log-signals">
             <summary>
               {plural(x.signals?.length ?? 0, 'signal')}

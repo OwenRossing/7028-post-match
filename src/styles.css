@@ -2498,6 +2498,7 @@ h3 {
 .robot-log-signals { margin-top: 8px; font-size: 14px; }
 .robot-log-signals summary { cursor: pointer; color: var(--muted); }
 .robot-log-signals .info-list { margin-top: 6px; max-height: 320px; overflow: auto; }
+.menu-path { font: 12px var(--font-mono); overflow-wrap: anywhere; color: var(--muted); }
 .info-actions { margin-top: 10px; }
 .diag { width: 100%; margin-top: 8px; font: 12px var(--font-mono); padding: 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); }
 .info-item.signal { display: flex; justify-content: space-between; gap: 16px; }

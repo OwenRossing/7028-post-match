@@ -4,3 +4,7 @@ dist
 .DS_Store
 coverage
 *.tsbuildinfo
+desktop/node_modules
+desktop/app
+desktop/build
+desktop/release

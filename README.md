@@ -43,9 +43,22 @@ A match is the Driver Station's `.dslog` + `.dsevents` plus any robot logs (`.wp
 - **Add to a specific match** with the download-arrow menu → **Add robot logs**.
 - **Info → Robot logs** shows each log, how it lined up with the Driver Station log (and how sure that is), and every signal in it. **Remove** takes one off, and it will not be added back by itself.
 - Everything is saved in this browser (unless you turned saving off). There is no limit in PitView; the browser's own storage is the limit, and the Library shows how much is in use.
-- **A `.hoot`** is kept with its match like any other robot log (CTRE puts the event and match in the file name during a field match, and PitView uses that to find the match), but its signals are not read yet: CTRE does not publish the format. Its card has **Copy hoot diagnostics**, a short text description of the file (first bytes, readable text, how compressed it looks) that can be pasted to work out the layout without sending the file. Or convert it to `.wpilog` with CTRE's Owlet (`owlet -f wpilog in.hoot out.wpilog`) or Tuner X and add that. A hoot shows as an amber `CTRE hoot` chip until it can be read.
+- **A `.hoot`** is kept with its match like any other robot log (CTRE puts the event and match in the file name during a field match, and PitView uses that to find the match), but its signals are not read yet: CTRE does not publish the format. Its card has **Copy hoot diagnostics**, a short text description of the file (first bytes, readable text, how compressed it looks) that can be pasted to work out the layout without sending the file. Or convert it to `.wpilog` with CTRE's Owlet (`owlet -f wpilog in.hoot out.wpilog`) or Tuner X and add that. A hoot shows as an amber `CTRE hoot` chip until it can be read. **The [desktop app](#desktop-app) runs Owlet for you**, on every hoot in its robot-log folder.
 
 Today the robot logs are lined up, matched and kept with the match. Charting their signals and judging them against earlier matches comes next.
+
+## Desktop app
+
+The desktop app is PitView with an engine inside it that does what a browser cannot: it watches the Driver Station folder **and a robot-log folder**, and runs CTRE's [Owlet](https://docs.ctr-electronics.com/cli-tools) on every `.hoot` that lands there. Copy the logs off the roboRIO (or its USB stick) into the robot-log folder; the `.wpilog` files are used as they are, each `.hoot` is converted in the background, and every log finds its match by itself.
+
+- **Get it:** GitHub → **Actions → Build desktop app → Run workflow**, then take `PitView-Setup-<version>.exe` (installer) or `PitView-Portable-<version>.exe` (no install) from the **desktop-latest** release. It is not code-signed, so Windows SmartScreen asks once: *More info → Run anyway*.
+- **Owlet:** install it from CTRE's CLI Tools page. PitView finds it on `PATH`, or next to the app, or in `Documents\PitView`; otherwise open the **⋯ menu → Locate Owlet…** and point at `owlet.exe`. A hoot waits until Owlet is found and then converts by itself. If Owlet refuses a file, the log's card and a notice show Owlet's own words, and it is tried again when Owlet changes or from **⋯ → Retry failed**.
+- **Folders:** the DS folder defaults to `C:\Users\Public\Documents\FRC\Log Files` and the robot-log folder to `Documents\PitView\Robot logs`. Change either from the ⋯ menu, which also opens them.
+- **The whole hoot, or nothing.** A conversion is only used after the `.wpilog` Owlet wrote has been read back from start to end: it must be a complete file, with signals in it, ending exactly on a record. A cut-off or empty result is rejected with the reason, and nothing partial is ever kept or shown. Owlet gets time in proportion to the file (at least 15 minutes, 20 seconds per MB), and what it prints is shown on the log's card. The card says how many signals came out and how much time they cover. A 240 MB converted log of 16 million records checks in about 4 seconds.
+- **What Owlet will not export is CTRE's call.** Owlet only exports the signals your device licences allow (a limited free set otherwise), and CTRE's licence check reads only the start of a long log unless a Deep Scan is run (Phoenix Tuner X has one). If a signal you expect is missing from the converted log, that is the likely reason. PitView does not work around it.
+- **Your library stays put:** the app serves itself on a fixed local port (7028, or the next free one), so the logs saved in it are there next time. Nothing leaves the machine.
+
+Run it from source with `npm run build`, then `cd desktop && npm install && npm start`.
 
 ## Auto-loading the latest match on the DS laptop
 
@@ -64,8 +77,8 @@ Three ways to do it, from least to most setup:
    # other devices on the network: http://<ds-laptop-ip>:5801
    ```
 
-   The server is read-only, has no dependencies, serves only `.dslog`/`.dsevents` files from that folder, and binds to localhost unless
-   you pass `--lan`. Options: `--dir <folder>`, `--port <n>`. A hosted PitView can also connect to it at `http://localhost:5801` from
+   The server is read-only, has no dependencies, serves only `.dslog`/`.dsevents` files from that folder (and the `.wpilog` files it has listed from the robot-log folder), and binds to localhost unless
+   you pass `--lan`. Options: `--dir <folder>`, `--port <n>`, `--robot-dir <folder>` and `--owlet <path>` to watch robot logs and convert hoots, `--convert-dir <folder>` for where converted logs are kept. A hosted PitView can also connect to it at `http://localhost:5801` from
    the **Connect DS** menu.
 
 No server is *needed* for any of the above. Parsing a match takes a few milliseconds in the browser.
@@ -95,7 +108,11 @@ src/workers/            parsing off the main thread
 src/lib/useLibrary.ts   uploads (saved to IndexedDB), watched DS folder, companion, background indexing
 src/lib/chartGroup.ts   shared zoom/pan/cursor/pin state across uPlot charts
 src/components/         UI (Viewer tabs, Compare, Library, Navigator, TimeChart…)
-server/companion.mjs    optional zero-dependency log server for the DS laptop
+server/companion.mjs    the engine: log server for the DS laptop, also the desktop app's core
+server/robot.mjs        the robot-log folder: lists logs, converts hoots in the background, serves what was checked
+server/owlet.mjs        finds and runs CTRE's Owlet; keeps a conversion only if it is whole
+server/wpilog-check.mjs reads a whole .wpilog from disk to see that it is complete (streams, any size)
+desktop/                Electron shell around the engine (npm start; the workflow builds the Windows installer)
 test/                   tests against the sample log and synthetic files
 ```
 

@@ -15,7 +15,7 @@ ctx.onmessage = (e: MessageEvent<WorkerRequest>) => {
   const { id, kind, dslog, dsevents, extras } = e.data;
   try {
     if (kind === 'probe') {
-      const res: WorkerResponse = { id, ok: true, probed: (extras ?? []).map((x) => describeExtra(x.name, x.kind, x.data, null, x.hoot)) };
+      const res: WorkerResponse = { id, ok: true, probed: (extras ?? []).map((x) => describeExtra(x.name, x.kind, x.data, null, x.hoot, x.note)) };
       ctx.postMessage(res);
       return;
     }
@@ -50,7 +50,7 @@ ctx.onmessage = (e: MessageEvent<WorkerRequest>) => {
     } else {
       const analysis = analyze(log, events);
       const anchor = extras?.length ? dsAnchor(log, events, analysis) : null;
-      const described = (extras ?? []).map((x) => describeExtra(x.name, x.kind, x.data, anchor, x.hoot));
+      const described = (extras ?? []).map((x) => describeExtra(x.name, x.kind, x.data, anchor, x.hoot, x.note));
       const warnings = [
         logError && `.dslog: ${logError}`,
         eventsError && `.dsevents: ${eventsError}`,

@@ -9,6 +9,7 @@
 import type { Analysis, Span } from './analysis';
 import type { DSEventsFile } from './dsevents';
 import type { DSLog } from './dslog';
+import { hootName } from './hoot';
 import { clockOffset, consoleLines, enabledWindows, fileStamp, matchIds, matchLabel, sameMatch, type MatchId, type WPILog } from './wpilog';
 
 export type AlignMethod = 'messages' | 'enabled' | 'clock';
@@ -125,6 +126,8 @@ export function rioAnchors(w: WPILog, fileName?: string): RioAnchors {
   let ids = matchIds(w);
   const stamp = fileName ? fileStamp(fileName) : undefined;
   if (!ids.length && stamp?.id) ids = [stamp.id];
+  // a log converted from a hoot keeps the hoot's name, which CTRE put the match in during a field match
+  if (!ids.length && fileName) ids = hootName(fileName).ids;
   return { first: w.first, last: w.last, enabled: enabledWindows(w), lines, clockOffset: clockOffset(w), ids };
 }
 
