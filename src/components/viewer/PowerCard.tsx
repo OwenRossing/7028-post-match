@@ -7,7 +7,7 @@ import type { ViewCtx } from './types';
 const SORTS: [PowerSort, string, string][] = [
   ['low', 'At the low point', "What each drew when the battery was lowest: the ones that pulled it down"],
   ['peak', 'Peak', 'The most each drew at any moment while enabled'],
-  ['used', 'Total used', 'Charge each drew while enabled, in amp-hours'],
+  ['used', 'Total used', 'Charge each drew while enabled, in milliamp-hours (mAh)'],
 ];
 const SHOWN = 8;
 const a0 = (v: number) => (Number.isFinite(v) ? v.toFixed(0) : '–');
@@ -113,7 +113,7 @@ export function PowerCard({ ctx, sources, report }: { ctx: ViewCtx; sources: Pow
               <th title="What it drew within 0.1 s of the battery's low point">At the low point</th>
               <th>Peak</th>
               <th title="Average while enabled">Average</th>
-              <th title="Charge drawn while enabled">Used</th>
+              <th title="Charge drawn while enabled, in milliamp-hours">Used</th>
             </tr>
           </thead>
           <tbody>
@@ -136,7 +136,7 @@ export function PowerCard({ ctx, sources, report }: { ctx: ViewCtx; sources: Pow
                   <td className={by === 'low' ? 'pw-key' : ''}>{a0(r.atLow)} A</td>
                   <td className={by === 'peak' ? 'pw-key' : ''}>{a0(r.peak)} A</td>
                   <td>{r.mean.toFixed(1)} A</td>
-                  <td className={by === 'used' ? 'pw-key' : ''}>{r.ah.toFixed(2)} Ah</td>
+                  <td className={by === 'used' ? 'pw-key' : ''}>{(r.ah * 1000).toFixed(0)} mAh</td>
                 </tr>
               );
             })}
