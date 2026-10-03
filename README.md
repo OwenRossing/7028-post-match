@@ -61,6 +61,14 @@ The desktop app is PitView with an engine inside it that does what a browser can
 
 Run it from source with `npm run build`, then `cd desktop && npm install && npm start`.
 
+## Which motor is using the power
+
+On the Graphs page, **Who drew the power** finds the moment the battery was lowest while the robot was enabled and ranks every power channel and motor current by what it drew **at that moment**, by its **peak**, and by the **total** it used (amp-hours). Click a row for its chart at that moment; **Go there** jumps to the low point. Clicking any time on a chart also says what was drawing then (*Drawing then: …*).
+
+- It uses the Driver Station's power distribution channels (named with your own channel names) and the motor currents of attached robot logs. For a motor with a **supply current** it uses that, because it is what the battery supplies; a **stator current** is the torque current and can be much higher, so a motor that only has one is listed with a *stator* warning.
+- **If there is nothing to rank, it says why**: what the Driver Station log recorded (no board at all, a board type PitView does not decode, or a board that never drew a full amp) and what to do. The Board's Power column says *Channels: not recorded* in the same case.
+- The Driver Station only records the channels of a REV PDH when it can read the board, which in practice needs the robot's code to create a `PowerDistribution` object (`new PowerDistribution(1, ModuleType.kRev)`; `(0, ModuleType.kCTRE)` for a PDP). If a log that used to have channels does not, check the robot code first.
+
 ## Per-motor use
 
 The **Channels** group on the Graphs page is the power distribution board's currents, and it comes from the **Driver Station log only**: the DS records them when the robot's code reads the PDH/PDP (WPILib's `PowerDistribution`) and the board is on the CAN bus. If your code does not, there is nothing to show there (the page says so). Attaching a robot log does not feed that group.

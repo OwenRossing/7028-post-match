@@ -4,6 +4,7 @@ import { BROWNOUT_VOLTS, type ChartId, type Span } from '../../lib/analysis';
 import type { DSEvent, EventKind } from '../../lib/dsevents';
 import type { DSLog } from '../../lib/dslog';
 import { chartsToPng, download, safeFileName } from '../../lib/export';
+import { drawAt, powerReport, powerSources, totalNear } from '../../lib/power';
 import { channelName, updateSettings, type TimeMode } from '../../lib/settings';
 import type { RobotSignal } from '../../lib/robotSeries';
 import { channelColor } from '../../lib/theme';
@@ -11,6 +12,7 @@ import { Icon } from '../Icon';
 import { Navigator, TimelineLegend } from '../Navigator';
 import { TimeChart, type AxisSpec, type Threshold } from '../TimeChart';
 import { Moment } from './Moment';
+import { PowerCard } from './PowerCard';
 import { Strip } from './Strip';
 import { useGroupValue, type ViewCtx } from './types';
 
@@ -292,6 +294,9 @@ export function Graphs({
     for (const s of signals) if (s.section === 'Robot') out.set(s.group ?? 'Other', [...(out.get(s.group ?? 'Other') ?? []), s]);
     return [...out];
   }, [signals]);
+  // Everything with a current, and who drew the most when the battery was lowest.
+  const sources = useMemo(() => (log ? powerSources(log, parsed.robot ?? [], (ch) => channelName(labels, ch)) : []), [log, parsed.robot, labels]);
+  const report = useMemo(() => (log ? powerReport(log, sources) : null), [log, sources]);
   // Robot logs that are attached but are not on the graphs, and why.
   const unplaced = useMemo(
     () => parsed.extras.filter((x) => x.ok && x.decoded !== false && (!x.alignment || (x.alignment.confidence !== 'high' && x.alignment.confidence !== 'medium'))),
@@ -698,7 +703,14 @@ export function Graphs({
         </div>
       </div>
 
-      <Moment ctx={ctx} />
+      <Moment
+        ctx={ctx}
+        draw={(t) => {
+          const i = Math.min(log.count - 1, Math.max(0, Math.round(t / log.period)));
+          return { top: drawAt(sources, i, 3).map((d) => ({ name: d.source.name, amps: d.amps })), total: totalNear(log, i, 2), volts: log.voltage[i] };
+        }}
+      />
+      {report && <PowerCard ctx={ctx} sources={sources} report={report} />}
 
       <div className={`graphs ${settings.eventsPanelOpen && parsed.events ? '' : 'no-panel'}`}>
         <div className="g-list">

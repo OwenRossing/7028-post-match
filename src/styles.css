@@ -2681,6 +2681,29 @@ h3 {
   box-shadow: 0 0 0 8px var(--bg), var(--shadow);
 }
 .moment.idle { background: var(--bg); box-shadow: 0 0 0 8px var(--bg), inset 0 0 0 2px var(--border-strong); }
+.mo-text.one { -webkit-line-clamp: 1; }
+.mo-draw { margin: 0; font-size: 13.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mo-draw b { color: var(--text); font-weight: 600; }
+.power-card { margin-top: 12px; }
+.pw-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.pw-title { margin: 0; font-size: 16px; font-weight: 700; }
+.pw-line { margin: 8px 0 0; font-size: 14px; color: var(--muted); }
+.pw-line b { color: var(--text); }
+.pw-note { font-size: 13px; color: var(--faint); }
+.pw-list { margin: 6px 0 10px; padding-left: 20px; font-size: 13.5px; color: var(--muted); display: grid; gap: 6px; }
+.pw-list code, .pw-line code { font-size: 12.5px; background: var(--bg); padding: 1px 5px; border-radius: 5px; }
+.pw-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; font-variant-numeric: tabular-nums; }
+.pw-table th { text-align: right; font-size: 11.5px; font-weight: 600; color: var(--faint); padding: 4px 8px; white-space: nowrap; }
+.pw-table th:first-child, .pw-table td:first-child { text-align: left; }
+.pw-table td { text-align: right; padding: 7px 8px; border-top: 1px solid var(--border); white-space: nowrap; }
+.pw-table tbody tr { cursor: pointer; }
+.pw-table tbody tr:hover { background: var(--accent-weak); }
+.pw-name { position: relative; width: 46%; }
+.pw-bar { position: absolute; left: 0; top: 50%; height: 60%; transform: translateY(-50%); background: var(--accent-weak); border-radius: 4px; z-index: 0; }
+.pw-label { position: relative; z-index: 1; font-weight: 600; padding-left: 6px; }
+.pw-warn { font-weight: 500; color: var(--warn); }
+.pw-key { font-weight: 700; }
+.pw-empty { text-align: center !important; color: var(--muted); padding: 14px 8px; }
 .mo-hint { flex: none; width: 210px; display: flex; align-items: center; gap: 14px; color: var(--muted); }
 .mo-hint b { display: block; font-size: 16px; font-weight: 600; color: var(--text); }
 .mo-hint span { font-size: 14px; }

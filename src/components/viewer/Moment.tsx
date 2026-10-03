@@ -21,7 +21,7 @@ const oneLine = (s: string) => s.split('\n')[0].trim();
  * once a time is pinned it says what is going on there. It is always the same size,
  * so clicking never moves the charts.
  */
-export function Moment({ ctx }: { ctx: ViewCtx }) {
+export function Moment({ ctx, draw }: { ctx: ViewCtx; draw?: (t: number) => { top: { name: string; amps: number }[]; total: number; volts: number } }) {
   const { group, parsed, tf, problems } = ctx;
   const { events, analysis } = parsed;
   const pinned = useGroupValue(group, 'pin', () => group.pinned);
@@ -42,6 +42,8 @@ export function Moment({ ctx }: { ctx: ViewCtx }) {
     return pairs.flatMap(([k, spans]) => (inSpan(spans, pinned) ? [BAND[k]] : []));
   }, [pinned, analysis]);
   const mode = pinned == null ? undefined : analysis.modes.find((m) => pinned >= m.start && pinned < m.end)?.mode;
+
+  const drawn = useMemo(() => (pinned == null ? undefined : draw?.(pinned)), [pinned, draw]);
 
   const near = useMemo(() => {
     if (pinned == null || !events) return { shown: [], more: 0 };
@@ -97,9 +99,16 @@ export function Moment({ ctx }: { ctx: ViewCtx }) {
                 {mode && ` · ${MODE_LABEL[mode]}`}
               </span>
             </div>
-            <p className="mo-text" title={text}>
+            <p className={`mo-text ${drawn?.top.length ? 'one' : ''}`} title={text}>
               {text}
             </p>
+            {drawn && drawn.top.length > 0 && (
+              <p className="mo-draw" title={drawn.top.map((d) => `${d.name} ${d.amps.toFixed(0)} A`).join(', ')}>
+                Drawing then: {drawn.top.map((d, k) => [k ? ' · ' : '', <b key={d.name}>{d.name}</b>, ` ${d.amps.toFixed(0)} A`])}
+                {Number.isFinite(drawn.total) && ` · ${drawn.total.toFixed(0)} A total`}
+                {Number.isFinite(drawn.volts) && ` · ${drawn.volts.toFixed(1)} V`}
+              </p>
+            )}
           </div>
           {near.shown.length > 0 && (
             <div className="mo-side">
