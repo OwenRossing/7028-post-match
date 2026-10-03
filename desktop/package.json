@@ -23,8 +23,7 @@
       "output": "release"
     },
     "files": [
-      "main.cjs",
-      "preload.cjs",
+      "*.cjs",
       "app/**/*",
       "package.json"
     ],

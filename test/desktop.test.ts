@@ -77,3 +77,20 @@ describe('putting dropped robot logs in the robot-log folder', () => {
     expect(existsSync(path.join(tmp, '..evil.hoot'))).toBe(true);
   });
 });
+
+describe('the packaged desktop app', () => {
+  it('includes every file its own code loads', () => {
+    // A file that main.cjs requires but electron-builder does not pack crashes the installed app at launch (and only there).
+    const root = path.join(__dirname, '..', 'desktop');
+    const files: string[] = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).build.files;
+    const packed = (name: string) => files.some((f) => f === name || (f === '*.cjs' && name.endsWith('.cjs')) || (f === '*.mjs' && name.endsWith('.mjs')));
+    const loaded: string[] = [];
+    for (const f of readdirSync(root).filter((n) => n.endsWith('.cjs'))) {
+      const code = readFileSync(path.join(root, f), 'utf8');
+      for (const m of code.matchAll(/require\(\s*['"]\.\/([^'"]+)['"]\s*\)/g)) loaded.push(m[1]);
+      expect(packed(f), `${f} is not packed`).toBe(true);
+    }
+    expect(loaded).toContain('robotfiles.cjs');
+    for (const name of loaded) expect(packed(name), `${name} is required by the app but is not packed`).toBe(true);
+  });
+});

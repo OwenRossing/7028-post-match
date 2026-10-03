@@ -39,6 +39,22 @@ jobs:
         working-directory: desktop
       - run: npx electron-builder --win --publish never
         working-directory: desktop
+      # A package that crashes at launch (a file missing from it, say) must not become a download.
+      - name: Start the built app and check that it answers
+        shell: bash
+        working-directory: desktop
+        env:
+          PITVIEW_USER_DATA: ${{ runner.temp }}/pitview-smoke
+        run: |
+          ./release/win-unpacked/PitView.exe &
+          ok=0
+          for i in $(seq 1 45); do
+            if curl -fs http://127.0.0.1:7028/api/info | grep -q pitview-companion; then ok=1; break; fi
+            sleep 1
+          done
+          taskkill //F //IM PitView.exe || true
+          if [ "$ok" != 1 ]; then echo "The built app did not start and answer on port 7028."; exit 1; fi
+          echo "The built app started and answered."
       - uses: actions/upload-artifact@v4
         with:
           name: PitView-windows
