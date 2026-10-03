@@ -52,7 +52,7 @@ describe.skipIf(process.platform === 'win32')('the page talking to the engine', 
     expect(parseWPILog(converted).entries[0].name).toBe('Phoenix6/TalonFX-1/Position');
     expect(new Uint8Array(await robotRef(h.url, hoot, 'source').read())).toEqual(new Uint8Array(100).fill(7));
     // and the converted file takes the match from the hoot's name when it has none of its own
-    expect(rioAnchors(parseWPILog(converted), 'MNST_Q22_rio_2026-05-16.hoot').ids).toEqual([{ type: 'qualification', number: 22 }]);
+    expect(rioAnchors(parseWPILog(converted), 'MNST_Q22_rio_2026-05-16.hoot').ids).toEqual([{ event: 'MNST', type: 'qualification', number: 22 }]);
   });
 
   it('summarises what Owlet is doing in plain words', () => {

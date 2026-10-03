@@ -47,7 +47,7 @@ describe('describeExtra', () => {
     expect(info.hoot!.strings.map((s) => s.text)).toContain('TalonFX-1/Position');
     expect(HOOT_NOTE).toMatch(/Owlet/);
     // the only thing to place it by is the match CTRE put in the name
-    expect(info.anchors!.ids).toEqual([{ type: 'qualification', number: 22 }]);
+    expect(info.anchors!.ids).toEqual([{ event: 'MNST', type: 'qualification', number: 22 }]);
   });
 
   it('does not read a .hoot again once it has been described', () => {

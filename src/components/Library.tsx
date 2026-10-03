@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { MIN_HISTORY, type HistoryStatus } from '../lib/baseline';
 import { hasDS, summaryKeyOf, type LogEntry } from '../lib/library';
+import { isHolding, UNSORTED, type EventInfo } from '../lib/events';
 import { describeDelete, planDelete } from '../lib/manage';
 import { fmtClock, fmtDate, fmtSpan } from '../lib/time';
 import { FileChips } from './FileChips';
@@ -36,6 +37,16 @@ interface Props {
   /** How many matches and robot logs are hidden (deleted from a watched folder). */
   hidden: number;
   onShowHidden: () => void;
+  /** Matches grouped into events, and which event each is in. */
+  events: EventInfo[];
+  eventOf: Map<string, string>;
+  onCreateEvent: (name: string) => void;
+  onRenameEvent: (id: string, name: string) => void;
+  onMoveToEvent: (keys: string[], id: string) => void;
+  /** Deletes the matches of an event, and the event itself when the user made it. */
+  onDeleteEvent: (id: string, keys: string[]) => void | Promise<void>;
+  /** Asks for files to add to this event. */
+  onAddToEvent: (id: string) => void;
 }
 
 function matchesQuery(e: LogEntry, q: string): boolean {
@@ -110,9 +121,10 @@ export function Library(props: Props) {
     [entries, q, filter, filterByBaseline, status],
   );
 
-  const groups = useMemo(() => {
+  /** Consecutive matches on the same day, for the day rows inside an event. */
+  const dayGroups = (items: LogEntry[]) => {
     const out: { label: string; events: Set<string>; items: LogEntry[] }[] = [];
-    for (const e of shown) {
+    for (const e of items) {
       const label = fmtDate(e.startTime);
       let g = out[out.length - 1];
       if (!g || g.label !== label) {
@@ -123,7 +135,35 @@ export function Library(props: Props) {
       g.items.push(e);
     }
     return out;
-  }, [shown]);
+  };
+
+  // The events, each with its days. Empty events the user made show unless the list is being filtered.
+  const filtering = q.trim() !== '' || filter !== 'all' || filterByBaseline;
+  const eventGroups = useMemo(() => {
+    const byEvent = new Map<string, LogEntry[]>();
+    for (const e of shown) {
+      const id = props.eventOf.get(e.key) ?? UNSORTED;
+      byEvent.set(id, [...(byEvent.get(id) ?? []), e]);
+    }
+    return props.events.filter((ev) => byEvent.has(ev.id) || (!filtering && ev.manual)).map((ev) => ({ ev, items: byEvent.get(ev.id) ?? [] }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shown, props.events, props.eventOf, filtering]);
+
+  // Events fold away; with a lot of matches only the newest and the open one start open.
+  const [folded, setFolded] = useState<Record<string, boolean>>({});
+  const isOpen = (ev: EventInfo, index: number) => filtering || (folded[ev.id] !== undefined ? !folded[ev.id] : entries.length <= 60 || index === 0 || (!!selectedKey && ev.keys.includes(selectedKey)));
+  const [menuFor, setMenuFor] = useState<string | null>(null);
+  // an open event menu closes when anything else is clicked
+  useEffect(() => {
+    if (menuFor == null) return;
+    const close = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement | null)?.closest?.('.lib-event-menu')) setMenuFor(null);
+    };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [menuFor]);
+  const [renaming, setRenaming] = useState<{ id: string; value: string } | null>(null);
+  const [creating, setCreating] = useState<string | null>(null);
 
   const hasSaved = entries.some((e) => e.source === 'saved' || e.source === 'upload');
   const stored = useStorageUsed(entries.length);
@@ -192,6 +232,27 @@ export function Library(props: Props) {
             </span>
           </div>
           <div className="manage-more">
+            <select
+              className="input manage-move"
+              value=""
+              disabled={!chosen.length}
+              aria-label="Move the selected matches to an event"
+              onChange={(ev) => {
+                if (ev.target.value) {
+                  props.onMoveToEvent(chosen, ev.target.value);
+                  setPicked(new Set());
+                }
+              }}
+            >
+              <option value="">Move to event…</option>
+              {props.events
+                .filter((x) => !isHolding(x.id))
+                .map((x) => (
+                  <option key={x.id} value={x.id}>
+                    {x.name}
+                  </option>
+                ))}
+            </select>
             <button className="link" onClick={clearAll}>
               Clear the whole library…
             </button>
@@ -205,39 +266,30 @@ export function Library(props: Props) {
       )}
       <div className="sidebar-head">
         <div className="sidebar-title">
-          <span>Library · {entries.length}</span>
-          <span className="row" style={{ gap: 4 }}>
-            {indexing > 0 && (
-              <span
-                className="row"
-                style={{ gap: 6, textTransform: 'none', letterSpacing: 0, fontWeight: 500 }}
-                title="Reading logs in the background"
-              >
-                <span className="spinner" style={{ width: 11, height: 11, borderWidth: 1.5 }} /> {indexing}
-              </span>
-            )}
-            {!compareSelecting && !managing && entries.length > 0 && (
-              <button
-                className="btn small ghost"
-                onClick={() => setManaging(true)}
-                title="Pick matches to delete, or clear the library"
-                style={{ textTransform: 'none', letterSpacing: 0 }}
-              >
+          <span className="sidebar-count">Library · {entries.length}</span>
+          {indexing > 0 && (
+            <span className="row" style={{ gap: 6, textTransform: 'none', letterSpacing: 0, fontWeight: 500 }} title="Reading logs in the background">
+              <span className="spinner" style={{ width: 11, height: 11, borderWidth: 1.5 }} /> {indexing}
+            </span>
+          )}
+        </div>
+        {!compareSelecting && !managing && (
+          <div className="sidebar-actions">
+            <button className="btn small ghost" onClick={() => setCreating('')} title="Make an event to collect logs in">
+              <Icon name="plus" size={13} /> Event
+            </button>
+            {entries.length > 0 && (
+              <button className="btn small ghost" onClick={() => setManaging(true)} title="Pick matches to delete or move, or clear the library">
                 <Icon name="list" size={13} /> Manage
               </button>
             )}
-            {!compareSelecting && !managing && entries.length > 1 && (
-              <button
-                className="btn small ghost"
-                onClick={props.beginCompare}
-                title="Compare logs"
-                style={{ textTransform: 'none', letterSpacing: 0 }}
-              >
+            {entries.length > 1 && (
+              <button className="btn small ghost" onClick={props.beginCompare} title="Compare logs">
                 <Icon name="compare" size={13} /> Compare
               </button>
             )}
-          </span>
-        </div>
+          </div>
+        )}
         <div className="search">
           <Icon name="search" size={14} />
           <input className="input" placeholder="Search: q22, MNST, practice…" value={q} onChange={(e) => setQ(e.target.value)} />
@@ -306,38 +358,132 @@ export function Library(props: Props) {
           <div className="lib-empty">No logs yet. Drop .dslog / .dsevents files anywhere, or connect the DS log folder.</div>
         )}
         {entries.length > 0 && !shown.length && <div className="lib-empty">Nothing matches.</div>}
-        {groups.map((g) => (
-          <div key={g.label}>
-            <div className="lib-group">
-              {managing && (
-                <input
-                  type="checkbox"
-                  className="lib-group-pick"
-                  aria-label={`Select all matches on ${g.label}`}
-                  checked={g.items.every((e) => picked.has(e.key))}
-                  onChange={(ev) => setMany(g.items.map((e) => e.key), ev.target.checked)}
-                />
-              )}
-              <span>{g.label}</span>
-              <span>{[...g.events, `${g.items.length} ${g.items.length === 1 ? 'match' : 'matches'}`].join(' · ')}</span>
-            </div>
-            {g.items.map((e) => (
-              <Row
-                key={e.key}
-                e={e}
-                selected={selectedKey === e.key}
-                compare={compareSelecting || managing}
-                checked={managing ? picked.has(e.key) : compareKeys.includes(e.key)}
-                inBaseline={!compareSelecting && !managing && !!status?.get(e.key)?.used}
-                showFile={filterByBaseline}
-                reason={status && e.key !== selectedKey ? (status.get(e.key) as { reason?: string } | undefined)?.reason : undefined}
-                onClick={() =>
-                  managing ? setMany([e.key], !picked.has(e.key)) : compareSelecting ? hasDS(e) && props.toggleCompare(e.key) : onSelect(e.key)
-                }
-              />
-            ))}
-          </div>
-        ))}
+        {creating !== null && (
+          <form
+            className="lib-new-event"
+            onSubmit={(ev) => {
+              ev.preventDefault();
+              if (creating.trim()) props.onCreateEvent(creating.trim());
+              setCreating(null);
+            }}
+          >
+            <input className="input" autoFocus placeholder="Event name, e.g. MNST week 1" value={creating} onChange={(ev) => setCreating(ev.target.value)} onKeyDown={(ev) => ev.key === 'Escape' && setCreating(null)} />
+            <button className="btn small primary" type="submit" disabled={!creating.trim()}>
+              Create
+            </button>
+            <button className="btn small ghost" type="button" onClick={() => setCreating(null)}>
+              Cancel
+            </button>
+          </form>
+        )}
+        {eventGroups.map(({ ev, items }, index) => {
+          const open = isOpen(ev, index);
+          const days = dayGroups(items);
+          const all = items.length > 0 && items.every((e) => picked.has(e.key));
+          return (
+            <section key={ev.id} className="lib-event">
+              <div className={`lib-event-head ${menuFor === ev.id ? 'menu-open' : ''}`}>
+                {managing && (
+                  <input type="checkbox" className="lib-group-pick" aria-label={`Select all matches in ${ev.name}`} checked={all} onChange={(x) => setMany(items.map((e) => e.key), x.target.checked)} />
+                )}
+                <button className="lib-event-toggle" onClick={() => setFolded((f) => ({ ...f, [ev.id]: open }))} aria-expanded={open} title={open ? 'Fold this event' : 'Open this event'}>
+                  <Icon name={open ? 'chevronDown' : 'chevronRight'} size={14} />
+                </button>
+                {renaming?.id === ev.id ? (
+                  <input
+                    className="input lib-event-rename"
+                    autoFocus
+                    value={renaming.value}
+                    onChange={(x) => setRenaming({ id: ev.id, value: x.target.value })}
+                    onBlur={() => setRenaming(null)}
+                    onKeyDown={(x) => {
+                      if (x.key === 'Enter') {
+                        props.onRenameEvent(ev.id, renaming.value);
+                        setRenaming(null);
+                      } else if (x.key === 'Escape') setRenaming(null);
+                    }}
+                  />
+                ) : (
+                  <span className="lib-event-name" title={ev.name}>
+                    {ev.name}
+                  </span>
+                )}
+                <span className="lib-event-count">
+                  {ev.keys.length ? `${ev.keys.length} ${ev.keys.length === 1 ? 'match' : 'matches'}` : 'empty'}
+                </span>
+                {!isHolding(ev.id) && !managing && (
+                  <span className="lib-event-actions">
+                    <button className="btn small ghost icon" onClick={() => props.onAddToEvent(ev.id)} title={`Add logs to ${ev.name}`} aria-label={`Add logs to ${ev.name}`}>
+                      <Icon name="plus" size={13} />
+                    </button>
+                    <span className="lib-event-menu">
+                      <button className="btn small ghost icon" onClick={() => setMenuFor(menuFor === ev.id ? null : ev.id)} title="More" aria-label={`More for ${ev.name}`}>
+                        <Icon name="more" size={13} />
+                      </button>
+                      {menuFor === ev.id && (
+                        <div className="menu lib-event-popup">
+                          <button
+                            className="item"
+                            onClick={() => {
+                              setMenuFor(null);
+                              setRenaming({ id: ev.id, value: ev.name });
+                            }}
+                          >
+                            Rename…
+                          </button>
+                          <button
+                            className="item danger"
+                            onClick={() => {
+                              setMenuFor(null);
+                              const what = ev.keys.length ? describeDelete(planDelete(entries, ev.keys)).replace(/^Delete/, `Delete the event "${ev.name}" and`) : `Delete the empty event "${ev.name}"?`;
+                              if (confirm(what)) void props.onDeleteEvent(ev.id, ev.keys);
+                            }}
+                          >
+                            Delete event…
+                          </button>
+                        </div>
+                      )}
+                    </span>
+                  </span>
+                )}
+              </div>
+              {open && !items.length && <div className="lib-event-empty">{ev.manual ? 'Nothing here yet. Use + to add logs to this event.' : 'Nothing matches.'}</div>}
+              {open &&
+                days.map((g) => (
+                  <div key={g.label}>
+                    <div className="lib-group">
+                      {managing && (
+                        <input
+                          type="checkbox"
+                          className="lib-group-pick"
+                          aria-label={`Select all matches on ${g.label}`}
+                          checked={g.items.every((e) => picked.has(e.key))}
+                          onChange={(x) => setMany(g.items.map((e) => e.key), x.target.checked)}
+                        />
+                      )}
+                      <span>{g.label}</span>
+                      <span>{`${g.items.length} ${g.items.length === 1 ? 'match' : 'matches'}`}</span>
+                    </div>
+                    {g.items.map((e) => (
+                      <Row
+                        key={e.key}
+                        e={e}
+                        selected={selectedKey === e.key}
+                        compare={compareSelecting || managing}
+                        checked={managing ? picked.has(e.key) : compareKeys.includes(e.key)}
+                        inBaseline={!compareSelecting && !managing && !!status?.get(e.key)?.used}
+                        showFile={filterByBaseline}
+                        reason={status && e.key !== selectedKey ? (status.get(e.key) as { reason?: string } | undefined)?.reason : undefined}
+                        onClick={() =>
+                          managing ? setMany([e.key], !picked.has(e.key)) : compareSelecting ? hasDS(e) && props.toggleCompare(e.key) : onSelect(e.key)
+                        }
+                      />
+                    ))}
+                  </div>
+                ))}
+            </section>
+          );
+        })}
       </div>
       {(hasSaved || props.hidden > 0) && (
         <div className="sidebar-foot">

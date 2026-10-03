@@ -66,14 +66,31 @@ describe('probeHoot', () => {
 });
 
 describe('hootName', () => {
+  it('keeps the event CTRE puts before the match, so a match number is not mistaken for the same number at another event', () => {
+    const n = hootName('MNST_Q22_rio_2026-05-16_16-38-21.hoot');
+    expect(n.event).toBe('MNST');
+    expect(n.ids).toEqual([{ event: 'MNST', type: 'qualification', number: 22 }]);
+    expect(hootName('2026mnst_E3_A1B2C3D4_2026-05-16_16-38-21.hoot').ids).toEqual([{ event: '2026mnst', type: 'elimination', number: 3 }]);
+    expect(hootName('rio_Practice_3_2026.hoot').event).toBeUndefined(); // no event named: nothing is invented
+    expect(hootName('rio_2026-05-16_16-38-21.hoot').event).toBeUndefined();
+  });
+
+  it('reads when the log began from the timestamp in the name', () => {
+    const t = Date.UTC(2026, 4, 16, 16, 38, 21) / 1000;
+    expect(hootName('rio_2026-05-16_16-38-21.hoot').stamp).toBe(t);
+    expect(hootName('MNST_Q22_rio_2026-05-16_16-38-21.hoot').stamp).toBe(t);
+    expect(hootName('rio_20260516_163821.hoot').stamp).toBe(t);
+    expect(hootName('notes.hoot').stamp).toBeUndefined();
+  });
+
   it('reads the device from the start of the name', () => {
-    expect(hootName('rio_2026-05-16_16-38-21.hoot')).toEqual({ device: 'rio', ids: [] });
+    expect(hootName('rio_2026-05-16_16-38-21.hoot')).toEqual({ device: 'rio', ids: [], stamp: Date.UTC(2026, 4, 16, 16, 38, 21) / 1000 });
     expect(hootName('A1B2C3D4_2026-05-16_16-38-21.hoot').device).toBe('A1B2C3D4');
     expect(hootName('rio_20260516_163821.hoot').device).toBe('rio'); // a compact date is not a serial
   });
 
   it('reads the match CTRE puts in the name during a field match', () => {
-    expect(hootName('MNST_Q22_rio_2026-05-16_16-38-21.hoot').ids).toEqual([{ type: 'qualification', number: 22 }]);
+    expect(hootName('MNST_Q22_rio_2026-05-16_16-38-21.hoot').ids).toEqual([{ event: 'MNST', type: 'qualification', number: 22 }]);
     expect(hootName('rio_Practice_3_2026.hoot').ids).toEqual([{ type: 'practice', number: 3 }]);
     expect(hootName('E4_rio.hoot').ids).toEqual([{ type: 'elimination', number: 4 }]);
     expect(hootName('rio_2026-05-16_16-38-21.hoot').ids).toEqual([]);

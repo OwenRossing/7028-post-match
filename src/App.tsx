@@ -43,6 +43,8 @@ export default function App() {
   const [headSlot, setHeadSlot] = useState<HTMLDivElement | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const extraInput = useRef<HTMLInputElement>(null);
+  const eventInput = useRef<HTMLInputElement>(null); // files to add to one event
+  const eventTarget = useRef<string | null>(null);
 
   // ---------- Theme ----------
   const [dark, setDark] = useState(() => resolvedDark(settings.theme));
@@ -101,12 +103,14 @@ export default function App() {
 
   /** Adds roboRIO / CTRE logs: to `target` when given, otherwise to the matches they fit, or to a new match of their own. */
   const addExtras = useCallback(
-    async (all: File[], target?: string) => {
+    async (all: File[], target?: string, eventId?: string) => {
       // In the desktop app a hoot goes to the robot-log folder, where Owlet converts it and it finds its match by itself.
       const bridge = desktopBridge();
       const hoots = bridge ? all.filter((f) => fileKind(f.name) === 'hoot') : [];
       const files = hoots.length ? all.filter((f) => !hoots.includes(f)) : all;
       if (bridge && hoots.length) {
+        // the hoots are copied into the robot-log folder and found there by name: say now which event they belong to
+        if (eventId) await library.assignLogsToEvent(hoots.map((f) => f.name), eventId);
         const r = await bridge
           .addRobotFiles(hoots)
           .catch((err) => ({ copied: [], skipped: [], failed: hoots.map((f) => ({ name: f.name, error: String((err as Error).message ?? err) })) }));
@@ -124,7 +128,7 @@ export default function App() {
         else if (r.skipped.length && !r.failed.length) toast('Already in the robot-log folder', r.skipped.join(', '), 'info');
       }
       if (!files.length) return;
-      const res = await library.attachExtras(files, target);
+      const res = await library.attachExtras(files, target, eventId);
       for (const r of res.rejected.slice(0, 2)) toast(r.name, r.reason, 'error');
       const title = (k: string) => library.entries.get(k)?.summary?.title ?? library.entries.get(k)?.robot?.title ?? k;
       const created = res.attached.filter((a) => a.created);
@@ -152,7 +156,7 @@ export default function App() {
   );
 
   const addFiles = useCallback(
-    async (files: File[]) => {
+    async (files: File[], eventId?: string) => {
       const logs = files.filter((f) => isLogFile(f.name));
       const extras = files.filter((f) => fileKind(f.name) === 'wpilog' || fileKind(f.name) === 'hoot');
       if (!logs.length && !extras.length) {
@@ -160,7 +164,7 @@ export default function App() {
         return;
       }
       if (logs.length) {
-        const added = await library.addFiles(logs);
+        const added = await library.addFiles(logs, eventId);
         const newest = [...added].sort((a, b) => b.startTime - a.startTime)[0];
         if (newest) openKey(newest.key, 'board');
         if (added.length > 1) toast(`Added ${added.length} logs`, 'They are listed in the library on the left.', 'success');
@@ -172,7 +176,7 @@ export default function App() {
           );
       }
       // after the DS logs, so a log dropped together with its match can find it
-      if (extras.length) await addExtras(extras);
+      if (extras.length) await addExtras(extras, undefined, eventId);
     },
     [library, openKey, toast, addExtras],
   );
@@ -334,6 +338,28 @@ export default function App() {
             await library.clearSaved();
             toast('Saved logs removed', undefined, 'success');
           }}
+          events={library.events}
+          eventOf={library.eventOf}
+          onCreateEvent={(name) => {
+            library.createEvent(name);
+            toast(`Made the event "${name}"`, 'Use + on it to add logs. They are only matched within the event.', 'success');
+          }}
+          onRenameEvent={(id, name) => library.renameEvent(id, name)}
+          onMoveToEvent={(keys, id) => {
+            library.moveToEvent(keys, id);
+            toast(keys.length === 1 ? 'Moved 1 match' : `Moved ${keys.length} matches`, library.events.find((e) => e.id === id)?.name, 'success');
+          }}
+          onDeleteEvent={async (id, keys) => {
+            const n = keys.length ? await library.deleteEntries(keys) : 0;
+            library.removeEvent(id);
+            if (selectedKey && keys.includes(selectedKey)) setSelectedKey(null);
+            setCompareKeys((ks) => ks.filter((k) => !keys.includes(k)));
+            toast('Event deleted', n ? `${n} ${n === 1 ? 'match' : 'matches'} removed with it. Files in your folders are not touched.` : undefined, 'success');
+          }}
+          onAddToEvent={(id) => {
+            eventTarget.current = id;
+            eventInput.current?.click();
+          }}
           hidden={library.hiddenMatches + library.hiddenRobotLogs}
           onShowHidden={async () => {
             await library.showHidden();
@@ -417,6 +443,20 @@ export default function App() {
           const files = [...(e.target.files ?? [])];
           e.target.value = '';
           if (files.length) void addFiles(files);
+        }}
+      />
+      <input
+        ref={eventInput}
+        type="file"
+        multiple
+        accept=".dslog,.dsevents,.wpilog,.hoot"
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          const files = [...(e.target.files ?? [])];
+          e.target.value = '';
+          const id = eventTarget.current;
+          eventTarget.current = null;
+          if (files.length && id) void addFiles(files, id);
         }}
       />
       <input

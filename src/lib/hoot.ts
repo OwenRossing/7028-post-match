@@ -7,8 +7,12 @@ import { matchKindOf, type MatchId } from './wpilog';
 export interface HootName {
   /** "rio" or the CANivore serial the log came from, when the name starts with one. */
   device?: string;
-  /** The match the name says it was recorded in (CTRE renames logs during a field match). */
+  /** The event the name says it was recorded at (CTRE puts the event, then the match, at the start of the name during a field match). */
+  event?: string;
+  /** The match the name says it was recorded in. Only the match it started in: a log runs on through the ones after it. */
   ids: MatchId[];
+  /** When the name says the log began, Unix seconds, read as UTC like the roboRIO's own clock (see `RioAnchors.stamp`). */
+  stamp?: number;
 }
 
 export interface HootProbe {
@@ -32,21 +36,30 @@ export interface HootProbe {
 
 const WINDOW = 65536;
 
-/** What a hoot's file name says. CTRE starts it with the CANivore serial or "rio", and renames it with the event and match during a field match. */
+const WORD_KIND = /^(practice|qualification|qual|qualifier|elimination|playoff|playoffs)$/i;
+
+/** What a hoot's file name says. CTRE starts it with the CANivore serial or "rio" and a timestamp, and during a field match renames it to start with the event, match type and number. */
 export function hootName(fileName: string): HootName {
-  const base = fileName.replace(/^.*[/\\]/, '').replace(/\.hoot$/i, '');
+  const base = fileName.replace(/^.*[/\\]/, '').replace(/\.(hoot|wpilog)$/i, '');
   const tokens = base.split(/[_\-. ]+/).filter(Boolean);
+  const when = /(\d{4})-(\d{2})-(\d{2})[_T ](\d{2})-(\d{2})-(\d{2})/.exec(base) ?? /(\d{4})(\d{2})(\d{2})[_T](\d{2})(\d{2})(\d{2})/.exec(base);
+  const stamp = when ? Date.UTC(+when[1], +when[2] - 1, +when[3], +when[4], +when[5], +when[6]) / 1000 : undefined;
   const isSerial = (t: string) => /^[0-9a-f]{6,}$/i.test(t) && /[a-f]/i.test(t); // hex with a letter: not a date like 20260516
-  const device = tokens.find((t) => /^rio$/i.test(t) || isSerial(t));
+  const isDevice = (t: string) => /^rio$/i.test(t) || isSerial(t);
+  const device = tokens.find(isDevice);
   const ids: MatchId[] = [];
+  let event: string | undefined;
   for (let i = 0; i < tokens.length; i++) {
     const compact = /^([pqe])(\d{1,3})$/i.exec(tokens[i]);
-    const word = /^(practice|qualification|qual|qualifier|elimination|playoff|playoffs)$/i.exec(tokens[i]);
+    const word = WORD_KIND.exec(tokens[i]);
     const kind = compact ? matchKindOf(compact[1]) : word ? matchKindOf(word[1]) : undefined;
     const number = compact ? Number(compact[2]) : word && /^\d{1,3}$/.test(tokens[i + 1] ?? '') ? Number(tokens[i + 1]) : undefined;
-    if (kind && number != null && !ids.some((m) => m.type === kind && m.number === number)) ids.push({ type: kind, number });
+    if (!kind || number == null) continue;
+    // what comes before the match, up to the device, is the event ("MNST_Q22_rio_…")
+    if (!ids.length) event = tokens.slice(0, i).filter((t) => !isDevice(t) && /^[A-Za-z0-9]+$/.test(t) && !/^\d{8}$/.test(t)).join('_') || undefined;
+    if (!ids.some((m) => m.type === kind && m.number === number)) ids.push({ ...(event ? { event } : {}), type: kind, number });
   }
-  return { device, ids };
+  return { device, event, ids, stamp };
 }
 
 function entropy(b: Uint8Array): number {

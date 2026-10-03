@@ -5,7 +5,7 @@
 // "robot match", key `robot:<log name>`); when a Driver Station log that it belongs to turns up, the robot match
 // joins it and goes away.
 
-import { planPlacements, type Candidate, type KnownLog, type Move, type RioAnchors } from './aggregate';
+import { planPlacements, type Candidate, type KnownLog, type Move, type PlanScope, type RioAnchors } from './aggregate';
 import type { HootProbe } from './hoot';
 import { idb } from './idb';
 import { candidateOf, robotCandidateOf, type ExtraFile, type ExtraKind, type FileRef, type LogEntry } from './library';
@@ -245,11 +245,14 @@ export class RobotLogStore {
 
   // ---------- Joining ----------
 
-  /** Where to place every known log among the matches that have a Driver Station log, and robot matches that can now join one. */
-  joinPlan(entries: Iterable<LogEntry>): { adds: Move[]; absorbed: string[] } {
+  /**
+   * Where to place every known log among the matches that have a Driver Station log, and robot matches that can now join one.
+   * `scope` says which event things belong to, and can limit the planning to matches that are new.
+   */
+  joinPlan(entries: Iterable<LogEntry>, scope: PlanScope = {}): { adds: Move[]; absorbed: string[] } {
     const list = [...entries];
     const cands = list.map(candidateOf).filter((c): c is Candidate => !!c);
-    const moves = planPlacements(this.known(), cands, (n, k) => this.has(n, k), (n, k) => this.isDismissed(n, k));
+    const moves = planPlacements(this.known(), cands, (n, k) => this.has(n, k), (n, k) => this.isDismissed(n, k), scope);
 
     // A robot match's logs are of one match: if one of them fits a DS match, they all do.
     const adds = [...moves];

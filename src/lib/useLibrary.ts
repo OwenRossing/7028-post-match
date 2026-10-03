@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { LogSummary } from './analysis';
 import { convertedNote, listCompanion, listRobot, probeCompanion, robotRef, watchCompanion, type CompanionInfo, type RobotItem, type RobotListing } from './companion';
 import {
@@ -12,7 +12,7 @@ import {
 } from './folder';
 import { desktopBridge } from './desktop';
 import { idb } from './idb';
-import { planPlacements, robotMatchTitle, type RioAnchors } from './aggregate';
+import { planPlacements, robotMatchTitle, type PlanScope, type RioAnchors } from './aggregate';
 import type { HootProbe } from './hoot';
 import {
   candidateOf,
@@ -28,6 +28,7 @@ import {
   type LogEntry,
   type SourceKind,
 } from './library';
+import { EventStore, groupEvents } from './events';
 import { planDelete } from './manage';
 import { robotKey, RobotLogStore } from './robotLogs';
 import { getSettings } from './settings';
@@ -115,6 +116,19 @@ export function useLibrary(opts: {
   // Robot logs and the matches made only of them. Kept apart from the entries so they survive a folder rescan.
   const store = useRef(new RobotLogStore()).current;
 
+  // Events: what the user decided about them. The grouping itself is worked out from the logs each time.
+  const eventStore = useRef(new EventStore()).current;
+  const [eventsVersion, setEventsVersion] = useState(0);
+  const saveEvents = useCallback(async () => {
+    setEventsVersion((v) => v + 1);
+    await eventStore.save();
+  }, [eventStore]);
+  /** Which event matches and logs belong to right now, so a log is only weighed against its own event's matches. */
+  const scopeNow = useCallback((): PlanScope => {
+    const of = groupEvents(entriesRef.current.values(), eventStore.state).of;
+    return { eventOfLog: (n) => eventStore.eventOfLog(n), eventOfMatch: (k) => of.get(k) };
+  }, [eventStore]);
+
   // Matches from a watched folder that the user deleted. Deleting never touches the folder, so they are hidden instead,
   // and stay hidden through rescans and restarts until shown again.
   const hidden = useRef(new Set<string>()).current;
@@ -155,10 +169,15 @@ export function useLibrary(opts: {
   // ---------- Uploads ----------
 
   const addFiles = useCallback(
-    async (files: File[]): Promise<LogEntry[]> => {
+    async (files: File[], eventId?: string): Promise<LogEntry[]> => {
       const refs = files.map(fileRefFromFile);
       const incoming = pairFiles(refs, 'upload');
       if (!incoming.length) return [];
+      // added to an event: those matches belong to it, whatever the logs say
+      if (eventId) {
+        eventStore.assign(incoming.map((e) => e.key), eventId);
+        void saveEvents();
+      }
       // adding a match by hand is asking for it, even if it was deleted from a watched folder before
       if (incoming.some((e) => hidden.delete(e.key))) void saveHidden();
       setEntries((cur) => mergeEntries(cur, incoming));
@@ -179,7 +198,7 @@ export function useLibrary(opts: {
       }
       return incoming.map((e) => entriesRef.current.get(e.key) ?? e);
     },
-    [setEntries, hidden, saveHidden],
+    [setEntries, hidden, saveHidden, eventStore, saveEvents],
   );
 
   const skipSaving = (key: string) => entriesRef.current.get(key)?.source === 'sample'; // the sample is not saved, so nothing attached to it is either
@@ -197,10 +216,12 @@ export function useLibrary(opts: {
    * match of its own, which takes the Driver Station log when that turns up.
    */
   const attachExtras = useCallback(
-    async (files: File[], target?: string): Promise<AttachResult> => {
+    async (files: File[], target?: string, eventId?: string): Promise<AttachResult> => {
       const result: AttachResult = { attached: [], rejected: [] };
       const wanted = files.filter((f) => fileKind(f.name) === 'wpilog' || fileKind(f.name) === 'hoot');
       if (!wanted.length) return result;
+      // added to an event: these logs are only matched within it
+      if (eventId) eventStore.assignLogs(wanted.map((f) => f.name), eventId);
 
       // Look inside each log first: refuses unreadable ones and gets what is needed to place them.
       const payloads = await Promise.all(
@@ -241,11 +262,12 @@ export function useLibrary(opts: {
         else {
           const entries = [...entriesRef.current.values()];
           const cands = [...entries.map(candidateOf), ...store.robotCandidates(entries)].filter((c) => !!c) as NonNullable<ReturnType<typeof candidateOf>>[];
-          keys = planPlacements([{ name: f.name, anchors: info.anchors }], cands, () => false, () => false).map((m) => m.key);
+          keys = planPlacements([{ name: f.name, anchors: info.anchors }], cands, () => false, () => false, scopeNow()).map((m) => m.key);
           if (!keys.length) {
             // fits nothing: it is a match of its own until a Driver Station log for it arrives
             const key = robotKey(f.name);
             store.addRobotMatch(key, { startTime: info.startUnix ?? f.lastModified / 1000, title: robotMatchTitle(info.anchors.ids, f.name) });
+            if (eventId) eventStore.assign([key], eventId);
             keys = [key];
             created = true;
           }
@@ -254,10 +276,11 @@ export function useLibrary(opts: {
         result.attached.push({ name: f.name, keys, created });
       }
       setEntries((cur) => new Map(cur));
+      if (eventId) await saveEvents();
       if (saved) await store.save(skipSaving);
       return result;
     },
-    [setEntries, store, waitForIndexing],
+    [setEntries, store, waitForIndexing, eventStore, saveEvents, scopeNow],
   );
 
   // ---------- Robot logs from the companion's robot-log folder ----------
@@ -307,7 +330,7 @@ export function useLibrary(opts: {
       const extra = { kind, file, role: info.role, anchors: info.anchors, startUnix: info.startUnix ?? item.mtime / 1000, decoded: info.decoded, hoot: info.hoot, remote: true, remoteId, note };
       const entries = [...entriesRef.current.values()];
       const cands = [...entries.map(candidateOf), ...store.robotCandidates(entries)].filter((c) => !!c) as NonNullable<ReturnType<typeof candidateOf>>[];
-      let keys = planPlacements([{ name: item.name, anchors: info.anchors }], cands, () => false, (n, k) => store.isDismissed(n, k)).map((m) => m.key);
+      let keys = planPlacements([{ name: item.name, anchors: info.anchors }], cands, () => false, (n, k) => store.isDismissed(n, k), scopeNow()).map((m) => m.key);
       if (!keys.length) {
         const key = robotKey(item.name);
         store.addRobotMatch(key, { startTime: extra.startUnix, title: robotMatchTitle(info.anchors.ids, item.name) });
@@ -315,7 +338,7 @@ export function useLibrary(opts: {
       }
       for (const key of keys) store.add(key, extra);
     },
-    [store],
+    [store, scopeNow],
   );
 
   /** Brings the library in line with the robot-log folder: new logs are attached, ones that went away or changed are taken off. */
@@ -393,11 +416,22 @@ export function useLibrary(opts: {
   // When matches appear (their DS logs have been read), robot logs that belong to them are added, and robot matches that
   // can now join their DS log do so.
   const joinSig = useRef('');
+  const planned = useRef(new Set<string>()); // matches already weighed against every known log
+  const plannedAgainst = useRef('');
   useEffect(() => {
-    const sig = [...entries.values()].map((e) => (candidateOf(e) ? e.key : '')).join('|') + `#${store.known().length}`;
+    const cands = [...entries.values()].filter((e) => candidateOf(e));
+    const sig = cands.map((e) => e.key).join('|') + `#${store.known().length}#${eventsVersion}`;
     if (sig === joinSig.current) return;
     joinSig.current = sig;
-    const plan = store.joinPlan(entries.values());
+    // When only new matches have turned up (a summary was read), only they need planning: the logs and the events are as before.
+    const against = store.known().map((l) => l.name).join('|') + `#${eventsVersion}`;
+    if (against !== plannedAgainst.current) {
+      planned.current.clear();
+      plannedAgainst.current = against;
+    }
+    const fresh = new Set(cands.filter((e) => !planned.current.has(e.key)).map((e) => e.key));
+    for (const k of fresh) planned.current.add(k);
+    const plan = store.joinPlan(entries.values(), { ...scopeNow(), only: (k) => fresh.has(k) });
     if (!plan.adds.length && !plan.absorbed.length) return;
     const title = (k: string) => entriesRef.current.get(k)?.summary?.title ?? k;
     const gained = store.applyJoin(plan);
@@ -408,7 +442,7 @@ export function useLibrary(opts: {
         gained.length === 1 ? `Robot logs joined ${title(gained[0])}` : `Robot logs joined ${gained.length} matches`,
         [...new Set(plan.adds.map((a) => a.name))].join(', '),
       );
-  }, [entries, store, setEntries]);
+  }, [entries, store, setEntries, eventsVersion, scopeNow]);
 
   /**
    * Deletes matches from the library: saved copies and attached robot logs are removed from this browser, and matches that
@@ -419,6 +453,7 @@ export function useLibrary(opts: {
       const plan = planDelete(entriesRef.current.values(), keys);
       if (!plan.keys.length) return 0;
       for (const k of plan.hide) hidden.add(k);
+      eventStore.forget(plan.keys);
       const dropped = plan.keys.flatMap((k) => store.dropMatch(k));
       setEntries((cur) => {
         const next = new Map(cur);
@@ -427,6 +462,7 @@ export function useLibrary(opts: {
       });
       try {
         await saveHidden();
+        await saveEvents();
         await store.save(skipSaving, dropped);
         if (plan.saved.length) {
           const index = ((await idb.get<SavedMeta[]>('kv', 'savedIndex')) ?? []).filter((m) => !plan.saved.includes(m.name));
@@ -439,7 +475,7 @@ export function useLibrary(opts: {
       }
       return plan.keys.length;
     },
-    [setEntries, store, hidden, saveHidden],
+    [setEntries, store, hidden, saveHidden, eventStore, saveEvents],
   );
 
   const removeEntry = useCallback((key: string) => deleteEntries([key]), [deleteEntries]);
@@ -449,9 +485,11 @@ export function useLibrary(opts: {
     const plan = planDelete(entriesRef.current.values(), [...entriesRef.current.keys()]);
     for (const k of plan.hide) hidden.add(k);
     store.dropAll();
+    eventStore.clear();
     setEntries(() => new Map());
     try {
       await saveHidden();
+      await saveEvents();
       await idb.clear('files');
       await idb.set('kv', 'savedIndex', []);
       await idb.clear('summaries');
@@ -460,7 +498,7 @@ export function useLibrary(opts: {
       optsRef.current.onError('Could not finish clearing', 'Browser storage was not available. The library is empty for this visit and may refill next time.');
     }
     return plan.counts.total;
-  }, [setEntries, store, hidden, saveHidden]);
+  }, [setEntries, store, hidden, saveHidden, eventStore, saveEvents]);
 
   const clearSaved = useCallback(async () => {
     await idb.clear('files');
@@ -642,6 +680,8 @@ export function useLibrary(opts: {
       await store.load();
       for (const k of (await idb.get<string[]>('kv', 'hiddenMatches')) ?? []) hidden.add(k);
       setHiddenMatches(hidden.size);
+      await eventStore.load();
+      setEventsVersion((v) => v + 1);
       if (!cancelled) setEntries((cur) => mergeEntries(cur, pairFiles(index.map(savedRef), 'saved')));
       if (folderSupported()) {
         const saved = await savedFolder();
@@ -709,8 +749,60 @@ export function useLibrary(opts: {
     })();
   }, [entries, setEntries]);
 
+  // ---------- Events ----------
+
+  const grouped = useMemo(() => groupEvents(entries.values(), eventStore.state), [entries, eventsVersion, eventStore]);
+
+  /** Makes an event of the user's own and returns its id. */
+  const createEvent = useCallback(
+    (name: string): string => {
+      const id = eventStore.create(name);
+      void saveEvents();
+      return id;
+    },
+    [eventStore, saveEvents],
+  );
+  const renameEvent = useCallback(
+    (id: string, name: string) => {
+      eventStore.rename(id, name);
+      void saveEvents();
+    },
+    [eventStore, saveEvents],
+  );
+  /** Moves matches to an event. */
+  const moveToEvent = useCallback(
+    (keys: string[], id: string) => {
+      eventStore.assign(keys, id);
+      void saveEvents();
+    },
+    [eventStore, saveEvents],
+  );
+  /** Removes an event the user made; its matches go back to where the logs put them. */
+  const removeEvent = useCallback(
+    (id: string) => {
+      eventStore.removeEvent(id);
+      void saveEvents();
+    },
+    [eventStore, saveEvents],
+  );
+  /** Says robot logs belong to an event (for files that are copied in elsewhere, such as the desktop app's robot-log folder). */
+  const assignLogsToEvent = useCallback(
+    async (names: string[], id: string) => {
+      eventStore.assignLogs(names, id);
+      await saveEvents();
+    },
+    [eventStore, saveEvents],
+  );
+
   return {
     entries,
+    events: grouped.events,
+    eventOf: grouped.of,
+    createEvent,
+    renameEvent,
+    moveToEvent,
+    removeEvent,
+    assignLogsToEvent,
     ready,
     folder,
     companion,

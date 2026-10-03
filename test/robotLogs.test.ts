@@ -118,13 +118,13 @@ describe('RobotLogStore', () => {
   it('keeps a robot match apart from a DS match the field says is a different one', () => {
     const s = new RobotLogStore(fakeDb());
     s.addRobotMatch('robot:a.wpilog', { startTime: DS_START, title: 'Qualification 31' });
-    s.add('robot:a.wpilog', extra('a.wpilog', anchors(DS_START - 30, 300, [{ type: 'qualification', number: 31 }])));
+    s.add('robot:a.wpilog', extra('a.wpilog', anchors(DS_START - 30, 300, [{ event: 'MNST', type: 'qualification', number: 31 }])));
     const q22 = dsMatch('q22', 0);
-    q22.summary = { ...q22.summary!, fms: true, matchType: 'Qualification', matchNumber: 22 };
+    q22.summary = { ...q22.summary!, fms: true, matchType: 'Qualification', matchNumber: 22, eventName: 'MNST' };
     expect(s.joinPlan([q22]).adds).toEqual([]); // clocks overlap, but the field called them different matches
     const q31 = dsMatch('q31', 100000);
-    q31.summary = { ...q31.summary!, fms: true, matchType: 'Qualification', matchNumber: 31 };
-    expect(s.joinPlan([q22, q31]).adds.map((a) => a.key)).toEqual(['q31']); // same match number: joins whatever the clocks say
+    q31.summary = { ...q31.summary!, fms: true, matchType: 'Qualification', matchNumber: 31, eventName: 'MNST' };
+    expect(s.joinPlan([q22, q31]).adds.map((a) => a.key)).toEqual(['q31']); // same event and match number: joins whatever the clocks say
   });
 
   it('remembers everything between visits', async () => {

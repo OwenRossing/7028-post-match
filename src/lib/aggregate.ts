@@ -52,6 +52,13 @@ export interface RioAnchors {
   clockOffset?: number;
   /** The matches the field said this log was running, or the one its file name gives. */
   ids: MatchId[];
+  /**
+   * Where `ids` came from: the log's own field records (every match it ran through), or only its file name (just the one
+   * it started in, since a log is named once). Read as 'log' when absent.
+   */
+  idsFrom?: 'log' | 'name';
+  /** When the file name says the log began (Unix seconds, read as UTC like the roboRIO's clock), for linking logs of one boot. */
+  stamp?: number;
 }
 
 const MIN_MESSAGE = 12;
@@ -124,11 +131,13 @@ export function rioAnchors(w: WPILog, fileName?: string): RioAnchors {
     MAX_LINES,
   );
   let ids = matchIds(w);
-  const stamp = fileName ? fileStamp(fileName) : undefined;
-  if (!ids.length && stamp?.id) ids = [stamp.id];
-  // a log converted from a hoot keeps the hoot's name, which CTRE put the match in during a field match
-  if (!ids.length && fileName) ids = hootName(fileName).ids;
-  return { first: w.first, last: w.last, enabled: enabledWindows(w), lines, clockOffset: clockOffset(w), ids };
+  let idsFrom: RioAnchors['idsFrom'] = 'log';
+  const named = fileName ? fileStamp(fileName) : undefined;
+  const hoot = fileName ? hootName(fileName) : undefined;
+  if (!ids.length && named?.id) [ids, idsFrom] = [[named.id], 'name'];
+  // a log converted from a hoot keeps the hoot's name, which CTRE put the event and match in during a field match
+  if (!ids.length && hoot?.ids.length) [ids, idsFrom] = [hoot.ids, 'name'];
+  return { first: w.first, last: w.last, enabled: enabledWindows(w), lines, clockOffset: clockOffset(w), ids, idsFrom: ids.length ? idsFrom : undefined, stamp: named?.unix ?? hoot?.stamp };
 }
 
 // ---------- Lining up ----------
@@ -316,30 +325,63 @@ export interface Placement {
   why: string;
 }
 
+/** What identity says about a pair. `weak` when one side names no event, so the same number at another event looks identical. */
+export interface Identity extends Placement {
+  weak?: boolean;
+}
+
 /** Same match number on both sides, or a different one. Nothing to say when either side has no identity. */
-export function identityFit(rio: RioAnchors, cand: Candidate): Placement | null {
+export function identityFit(rio: RioAnchors, cand: Candidate): Identity | null {
   if (!rio.ids.length || !cand.id) return null;
   const same = rio.ids.find((i) => sameMatch(i, cand.id!));
   return same
-    ? { fit: 'high', why: `both are ${matchLabel(cand.id)}` }
+    ? { fit: 'high', why: `both are ${matchLabel(cand.id)}`, weak: !same.event || !cand.id.event }
     : { fit: 'none', why: `the robot log is of ${rio.ids.map(matchLabel).join(', ')}, not ${matchLabel(cand.id)}` };
+}
+
+/** What is known beyond the two logs themselves about whether they could be of the same match. */
+export interface PlaceContext {
+  /** The log and the match are known to be of one event (the user put them there, or it was clear). */
+  sameEvent?: boolean;
+  /** How many matches in the pool the log's name points at. A name that shares no event with the match is only trusted alone when it points at one. */
+  nameMatches?: number;
 }
 
 /**
  * How well a robot log fits a match. Best evidence first: the field's own name for the match, then both machines'
- * wall clocks, then the shape of what happened (messages, enabled periods). Only 'high' is trusted without asking.
+ * wall clocks, then what happened (shared messages). Only 'high' is trusted without asking.
+ *
+ * The evidence is checked against itself, because a pool of many events makes each piece weaker alone: a name that
+ * names no event fits the same number everywhere, a name only says where a run began, and every match has the same
+ * auto/teleop shape, so enabled periods alone never make a log fit.
  */
-export function placeLog(rio: RioAnchors, cand: Candidate): Placement {
-  const byId = identityFit(rio, cand);
-  if (byId) return byId;
+export function placeLog(rio: RioAnchors, cand: Candidate, ctx: PlaceContext = {}): Placement {
   const a = cand.anchor;
-  if (rio.clockOffset != null && a.startUnix != null && a.duration > 1) {
-    const ratio = overlap({ start: rio.first + rio.clockOffset, end: rio.last + rio.clockOffset }, { start: a.startUnix, end: a.startUnix + a.duration }) / a.duration;
+  const ratio =
+    rio.clockOffset != null && a.startUnix != null && a.duration > 1
+      ? overlap({ start: rio.first + rio.clockOffset, end: rio.last + rio.clockOffset }, { start: a.startUnix, end: a.startUnix + a.duration }) / a.duration
+      : undefined;
+  const byId = identityFit(rio, cand);
+  if (byId?.fit === 'high') {
+    // both name the event, or the log was put in the match's event: the field's own word, whatever the clocks say
+    if (!byId.weak || ctx.sameEvent) return { fit: 'high', why: byId.why };
+    // otherwise the same number at another event looks identical, and the clock has to say which
+    if (ratio !== undefined)
+      return ratio >= 0.5 ? { fit: 'high', why: `${byId.why}, and the two clocks agree` } : { fit: 'medium', why: `${byId.why}, but the two clocks say they do not overlap` };
+    return ctx.nameMatches === 1
+      ? { fit: 'high', why: byId.why }
+      : { fit: 'medium', why: `${byId.why}, but that match number is in more than one event and nothing else says which` };
+  }
+  // the log's own records name every match it ran through, so another number is a no; a file name only gives the first
+  if (byId?.fit === 'none' && rio.idsFrom !== 'name') return byId;
+  if (ratio !== undefined) {
     if (ratio >= 0.5) return { fit: 'high', why: 'the two clocks say they overlap' };
     return ratio < 0.1 ? { fit: 'none', why: 'the two clocks say they do not overlap' } : { fit: 'low', why: 'the two clocks say they overlap only partly' };
   }
   const al = alignAnchors(rio, a);
-  return { fit: al.method === 'clock' ? 'none' : al.confidence, why: al.detail };
+  // every match has the same enabled shape, so on its own that can suggest a fit but never settle one
+  const fit = al.method === 'clock' ? 'none' : al.method === 'enabled' && RANK[al.confidence] > RANK.medium ? 'medium' : al.confidence;
+  return { fit, why: al.detail };
 }
 
 /** A robot log that is known to the library, with what is needed to place it on a match. */
@@ -354,23 +396,81 @@ export interface Move {
   why: string;
 }
 
+/** Which event things belong to, so a log is only weighed against the matches of its own. Anything unknown is left unscoped. */
+export interface PlanScope {
+  eventOfMatch?: (key: string) => string | undefined;
+  eventOfLog?: (name: string) => string | undefined;
+  /**
+   * Only plan for these matches (the ones that are new). The rest still count when judging a name, so a match number
+   * that is also at another event is still seen to be in more than one place.
+   */
+  only?: (key: string) => boolean;
+}
+
+const sameEventName = (a?: string, b?: string) => !!a && !!b && a.toLowerCase() === b.toLowerCase();
+
 /**
  * Where robot logs should be added now: every (log, match) pair that fits with high confidence and is not already
  * so, or was not taken off by the user. Run again whenever matches appear.
+ *
+ * A log that has been put in an event is only weighed against that event's matches. After that, a log with no
+ * evidence of its own is added wherever the log of the same boot (same start, same length) went: a Phoenix log
+ * and the roboRIO's log of one run belong to the same matches.
  */
 export function planPlacements(
   logs: KnownLog[],
   cands: Candidate[],
   has: (name: string, key: string) => boolean,
   dismissed: (name: string, key: string) => boolean,
+  scope: PlanScope = {},
 ): Move[] {
   const out: Move[] = [];
-  for (const l of logs)
-    for (const c of cands) {
+  for (const l of logs) {
+    const home = scope.eventOfLog?.(l.name);
+    const pool = home ? cands.filter((c) => !scope.eventOfMatch?.(c.key) || sameEventName(scope.eventOfMatch(c.key), home)) : cands;
+    // a name is only trusted by itself when it points at one match
+    const nameMatches = pool.reduce((n, c) => n + (identityFit(l.anchors, c)?.fit === 'high' ? 1 : 0), 0);
+    for (const c of pool) {
+      if (scope.only && !scope.only(c.key)) continue;
       if (has(l.name, c.key) || dismissed(l.name, c.key)) continue;
-      const p = placeLog(l.anchors, c);
+      const p = placeLog(l.anchors, c, { sameEvent: sameEventName(home, scope.eventOfMatch?.(c.key)), nameMatches });
       if (p.fit === 'high') out.push({ name: l.name, key: c.key, why: p.why });
     }
+  }
+  return [...out, ...fromSameBoot(logs, cands, out, has, dismissed)];
+}
+
+/**
+ * Moves for logs of the same boot as one that is placed: they began together and ran for as long. Counts what is
+ * already attached as well as what is being added now, since either log may have come first.
+ */
+function fromSameBoot(
+  logs: KnownLog[],
+  cands: Candidate[],
+  moves: Move[],
+  has: (n: string, k: string) => boolean,
+  dismissed: (n: string, k: string) => boolean,
+): Move[] {
+  const startOf = (a: RioAnchors) => a.stamp ?? (a.clockOffset != null ? a.first + a.clockOffset : undefined);
+  const placed = new Map<string, Set<string>>(logs.map((l) => [l.name, new Set<string>()]));
+  for (const m of moves) placed.get(m.name)?.add(m.key);
+  for (const l of logs) for (const c of cands) if (has(l.name, c.key)) placed.get(l.name)!.add(c.key);
+  const out: Move[] = [];
+  for (const l of logs) {
+    const t = startOf(l.anchors);
+    const d = l.anchors.last - l.anchors.first;
+    if (t == null || d < 30) continue;
+    const same = logs.filter((w) => {
+      const wt = startOf(w.anchors);
+      const wd = w.anchors.last - w.anchors.first;
+      return w !== l && placed.get(w.name)!.size > 0 && wt != null && Math.abs(wt - t) <= 90 && Math.abs(wd - d) <= Math.max(10, 0.05 * d);
+    });
+    if (same.length !== 1) continue; // none, or more than one run that looks alike: not safe to say
+    const theirs = placed.get(same[0].name)!;
+    const mine = placed.get(l.name)!;
+    if (![...mine].every((k) => theirs.has(k))) continue; // this log says it ran somewhere the other did not
+    for (const k of theirs) if (!mine.has(k) && !dismissed(l.name, k)) out.push({ name: l.name, key: k, why: `same boot as ${same[0].name}` });
+  }
   return out;
 }
 

@@ -61,6 +61,27 @@ The desktop app is PitView with an engine inside it that does what a browser can
 
 Run it from source with `npm run build`, then `cd desktop && npm install && npm start`.
 
+## Events
+
+The library groups matches by **event**, newest first, and each event folds away.
+
+- **Found from the logs.** A Driver Station log says which event it was recorded at (the field names it), so those matches group into `MNST 2026`, `WIMI 2026` and so on by themselves. Matches with no field (shop practice) group into sessions, and a match with no field name on the days of an event (a pit test) goes with that event.
+- **Matches that have not been read yet** wait in a *Reading logs…* group instead of being guessed into an event and moved: dropping hundreds of logs at once is fine.
+- **Make your own events** with **+ Event**, rename any event from its **⋯** menu, move matches into one from **Manage → Move to event…**, and delete an event with its matches from the same menu. What you decide is remembered.
+- **Add logs to an event** with the **+** on its header. Those logs are only matched against that event's matches, which is what keeps events apart when their match numbers collide (every event has a Qualification 22). Dropping files anywhere still works: they find their event by themselves where the evidence is clear.
+
+## How robot logs find their match
+
+Every robot log (a roboRIO `.wpilog`, or a Phoenix `.hoot` once converted) is weighed against the matches, best evidence first, and only a clear answer is acted on. The rest are kept as robot-log-only matches rather than guessed.
+
+- **The field's own name for the match** (event, type, number) is trusted whatever the clocks say. A name with no event (a log's file name, or a hoot's) is only trusted when the clock agrees, or the number exists at only one event, or the log was added to an event. A name taken from a *file name* only says where the run began, so it never rules out the matches after it.
+- **Both machines' clocks** place a log on every match it overlaps, so one run that spans several matches goes on all of them.
+- **Shared console messages** can place a log with no clock and no names.
+- **The shape of the enabled periods alone never places a log**: the field makes every match look the same.
+- **A Phoenix log of the same boot** as a roboRIO log (it began within 90 s and ran for about as long) goes wherever that log went. This is how a hoot gets onto all the matches of its run when its name only mentions the first.
+
+On a synthetic pool (`test/matching.test.ts`: 240 matches at three events with colliding numbers plus shop days, and 158 robot logs of the kinds above) the old rules put 48% of what they placed on the right match, with 295 wrong placements. These rules put 100% on the right match, with none wrong, and find 93% of the right placements (94% when logs are added to their event). That pool is made up from how the formats are documented, not real logs, so how it holds up on yours is the thing to check.
+
 ## Managing logs
 
 Open the library (the **Logs** button) and press **Manage**.
