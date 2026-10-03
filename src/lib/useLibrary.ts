@@ -11,17 +11,22 @@ import {
   scanFolder,
 } from './folder';
 import { idb } from './idb';
+import { matchesForSpan, type Candidate } from './aggregate';
+import { HOOT_HELP } from './extras';
 import {
+  fileKind,
   fileRefFromFile,
   mergeEntries,
   pairFiles,
-  versionKey,
+  summaryKeyOf,
+  type ExtraFile,
+  type ExtraKind,
   type FileRef,
   type LogEntry,
   type SourceKind,
 } from './library';
 import { getSettings } from './settings';
-import { summarizeLog } from './workerClient';
+import { probeExtras, summarizeLog } from './workerClient';
 
 export interface FolderState {
   status: 'none' | 'unsupported' | 'needs-permission' | 'connected' | 'error';
@@ -42,6 +47,21 @@ interface SavedMeta {
   mtime: number;
 }
 
+/** A log attached to a match, as remembered between visits. The bytes sit in the `files` store under `name`. */
+interface SavedExtra extends SavedMeta {
+  kind: ExtraKind;
+}
+
+/** What happened to files offered to `attachExtras`. */
+export interface AttachResult {
+  /** Logs that were added, with the matches they went to. */
+  attached: { name: string; keys: string[] }[];
+  /** Logs that cannot be used, and why. */
+  rejected: { name: string; reason: string }[];
+  /** Readable logs that could not be matched to any match (no clock to go by). */
+  unplaced: string[];
+}
+
 const POLL_MS = 2000;
 const LIVE_SUMMARY_MIN_MS = 10000;
 const SAMPLE_NAME = '2026_05_16 11_38_21 Sat';
@@ -57,6 +77,10 @@ function savedRef(meta: SavedMeta): FileRef {
       return data;
     },
   };
+}
+
+function extraRef(meta: SavedMeta): FileRef {
+  return savedRef(meta);
 }
 
 function signature(files: FileRef[]): string {
@@ -81,8 +105,18 @@ export function useLibrary(opts: { onNewLog: (e: LogEntry) => void; onError: (ti
   const companionSig = useRef('');
   const stopCompanion = useRef<(() => void) | null>(null);
 
+  // Logs attached to matches, by match key. Kept apart from the entries so they survive a folder rescan.
+  const attachments = useRef(new Map<string, ExtraFile[]>());
+
   const setEntries = useCallback((fn: (m: Map<string, LogEntry>) => Map<string, LogEntry>) => {
-    const next = fn(entriesRef.current);
+    let next = fn(entriesRef.current);
+    let copied = false;
+    for (const [key, e] of next) {
+      const x = attachments.current.get(key);
+      if (e.extras === x) continue;
+      if (!copied) (next = new Map(next), (copied = true));
+      next.set(key, { ...e, extras: x });
+    }
     entriesRef.current = next;
     setEntriesState(next);
   }, []);
@@ -132,14 +166,109 @@ export function useLibrary(opts: { onNewLog: (e: LogEntry) => void; onError: (ti
     [setEntries],
   );
 
+  /** Writes what is attached to which match, and deletes stored files nothing refers to any more. */
+  const saveAttachments = useCallback(async (dropped: string[] = []) => {
+    try {
+      const out: Record<string, SavedExtra[]> = {};
+      const inUse = new Set<string>();
+      for (const [key, list] of attachments.current) {
+        if (entriesRef.current.get(key)?.source === 'sample') continue; // the sample is not saved, so nothing attached to it is either
+        out[key] = list.map((x) => ({ kind: x.kind, name: x.file.name, size: x.file.size, mtime: x.file.mtime }));
+        list.forEach((x) => inUse.add(x.file.name));
+      }
+      await idb.set('kv', 'attachments', out);
+      for (const name of dropped) if (!inUse.has(name)) await idb.del('files', name);
+    } catch {
+      /* browser storage unavailable: attachments stay for this visit only */
+    }
+  }, []);
+
+  /**
+   * Adds roboRIO / CTRE logs to matches. With a `target` they all go to that match. Without one, each log goes to
+   * every match its own clock says it covers (a run of robot code can span several DS logs).
+   */
+  const attachExtras = useCallback(
+    async (files: File[], target?: string): Promise<AttachResult> => {
+      const result: AttachResult = { attached: [], rejected: [], unplaced: [] };
+      const wanted: File[] = [];
+      for (const f of files) {
+        const kind = fileKind(f.name);
+        if (kind === 'hoot') result.rejected.push({ name: f.name, reason: HOOT_HELP });
+        else if (kind === 'wpilog') wanted.push(f);
+      }
+      if (!wanted.length) return result;
+
+      // Look inside each log first: refuses unreadable ones and finds the matches a clock puts it in.
+      const payloads = await Promise.all(wanted.map(async (f) => ({ name: f.name, kind: 'wpilog' as const, data: await f.arrayBuffer() })));
+      const probed = await probeExtras(payloads.map((p) => ({ ...p, data: p.data.slice(0) })));
+      if (!target) {
+        // a match dropped together with its robot log is still being read, and its length is needed to place the log
+        const deadline = Date.now() + 8000;
+        const reading = () => [...entriesRef.current.values()].some((e) => (e.dslog || e.dsevents) && e.summaryKey !== summaryKeyOf(e) && !e.summaryError);
+        while (reading() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 150));
+      }
+      const candidates: Candidate[] = [...entriesRef.current.values()]
+        .filter((e) => e.summary && e.summary.startTime > 0)
+        .map((e) => ({ key: e.key, startUnix: e.summary!.startTime, duration: e.summary!.duration }));
+
+      const saved = getSettings().persistUploads;
+      for (const [i, f] of wanted.entries()) {
+        const info = probed[i];
+        if (!info?.ok) {
+          result.rejected.push({ name: f.name, reason: info?.error ?? 'Could not read this file.' });
+          continue;
+        }
+        const keys = target ? [target] : matchesForSpan(info.clock, candidates);
+        if (!keys.length) {
+          result.unplaced.push(f.name);
+          continue;
+        }
+        let ref = fileRefFromFile(f);
+        if (saved) {
+          try {
+            await idb.set('files', f.name, payloads[i].data);
+            ref = extraRef({ name: f.name, size: f.size, mtime: f.lastModified });
+          } catch {
+            optsRef.current.onError('Could not save the log offline', 'Browser storage is full or unavailable. It is attached for this visit only.');
+          }
+        }
+        for (const key of keys) {
+          // adding a log with the same name again replaces the earlier copy
+          const list = (attachments.current.get(key) ?? []).filter((x) => x.file.name !== f.name);
+          attachments.current.set(key, [...list, { kind: 'wpilog', file: ref }]);
+        }
+        result.attached.push({ name: f.name, keys });
+      }
+      setEntries((cur) => new Map(cur));
+      if (saved) await saveAttachments();
+      return result;
+    },
+    [setEntries, saveAttachments],
+  );
+
+  /** Takes one attached log off a match. */
+  const detachExtra = useCallback(
+    async (key: string, name: string) => {
+      const rest = (attachments.current.get(key) ?? []).filter((x) => x.file.name !== name);
+      if (rest.length) attachments.current.set(key, rest);
+      else attachments.current.delete(key);
+      setEntries((cur) => new Map(cur));
+      await saveAttachments([name]);
+    },
+    [setEntries, saveAttachments],
+  );
+
   const removeEntry = useCallback(
     async (key: string) => {
       const e = entriesRef.current.get(key);
+      const dropped = (attachments.current.get(key) ?? []).map((x) => x.file.name);
+      attachments.current.delete(key);
       setEntries((cur) => {
         const next = new Map(cur);
         next.delete(key);
         return next;
       });
+      if (dropped.length) await saveAttachments(dropped);
       if (e && (e.source === 'saved' || e.source === 'upload')) {
         const names = [e.dslog?.name, e.dsevents?.name].filter(Boolean) as string[];
         const index = ((await idb.get<SavedMeta[]>('kv', 'savedIndex')) ?? []).filter((m) => !names.includes(m.name));
@@ -153,6 +282,8 @@ export function useLibrary(opts: { onNewLog: (e: LogEntry) => void; onError: (ti
   const clearSaved = useCallback(async () => {
     await idb.clear('files');
     await idb.set('kv', 'savedIndex', []);
+    await idb.set('kv', 'attachments', {});
+    attachments.current.clear();
     await idb.clear('summaries');
     setEntries((cur) => new Map([...cur].filter(([, e]) => e.source !== 'saved' && e.source !== 'upload')));
   }, [setEntries]);
@@ -305,7 +436,11 @@ export function useLibrary(opts: { onNewLog: (e: LogEntry) => void; onError: (ti
     let cancelled = false;
     (async () => {
       const index = (await idb.get<SavedMeta[]>('kv', 'savedIndex')) ?? [];
-      if (!cancelled && index.length) setEntries((cur) => mergeEntries(cur, pairFiles(index.map(savedRef), 'saved')));
+      const remembered = (await idb.get<Record<string, SavedExtra[]>>('kv', 'attachments')) ?? {};
+      for (const [key, list] of Object.entries(remembered))
+        attachments.current.set(key, list.map((m) => ({ kind: m.kind, file: extraRef(m) })));
+      if (!cancelled && (index.length || attachments.current.size))
+        setEntries((cur) => mergeEntries(cur, pairFiles(index.map(savedRef), 'saved')));
       if (folderSupported()) {
         const saved = await savedFolder();
         if (!cancelled && saved) {
@@ -332,7 +467,7 @@ export function useLibrary(opts: { onNewLog: (e: LogEntry) => void; onError: (ti
   const queueTimer = useRef(0);
 
   useEffect(() => {
-    const pending = [...entries.values()].filter((e) => e.summaryKey !== versionKey(e) && !e.summaryError);
+    const pending = [...entries.values()].filter((e) => e.summaryKey !== summaryKeyOf(e) && !e.summaryError);
     setIndexing(pending.length);
     if (!pending.length || inFlight.current.size) return;
     pending.sort((a, b) => b.startTime - a.startTime);
@@ -343,7 +478,7 @@ export function useLibrary(opts: { onNewLog: (e: LogEntry) => void; onError: (ti
       queueTimer.current = window.setTimeout(() => setEntries((m) => new Map(m)), 2000);
       return;
     }
-    const vkey = versionKey(next);
+    const vkey = summaryKeyOf(next);
     inFlight.current.add(vkey);
     lastRun.current.set(next.key, now);
     (async () => {
@@ -366,7 +501,7 @@ export function useLibrary(opts: { onNewLog: (e: LogEntry) => void; onError: (ti
         const e = cur.get(next.key);
         if (!e) return new Map(cur);
         const m = new Map(cur);
-        if (versionKey(e) === vkey) m.set(e.key, { ...e, summary: summary ?? e.summary, summaryKey: vkey, summaryError: error });
+        if (summaryKeyOf(e) === vkey) m.set(e.key, { ...e, summary: summary ?? e.summary, summaryKey: vkey, summaryError: error });
         return m;
       });
     })();
@@ -379,6 +514,8 @@ export function useLibrary(opts: { onNewLog: (e: LogEntry) => void; onError: (ti
     companion,
     indexing,
     addFiles,
+    attachExtras,
+    detachExtra,
     removeEntry,
     clearSaved,
     loadSample,

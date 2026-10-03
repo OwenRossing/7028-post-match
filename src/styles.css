@@ -2463,6 +2463,24 @@ h3 {
   .tabs-strip .tab { padding: 0 4px; font-size: 14px; min-width: 0; }
 }
 
+/* ---------- Robot logs on the Info page ---------- */
+.robot-log { padding: 10px 0 12px; border-top: 0.5px solid var(--border); }
+.robot-log:first-child { border-top: 0; padding-top: 0; }
+.robot-log-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.robot-log-head .btn { margin-left: auto; }
+.robot-log-note { margin: 6px 0 0; font-size: 14px; color: var(--muted); }
+.robot-log-note.high b { color: var(--good); }
+.robot-log-note.medium b { color: var(--warn); }
+.robot-log-note.low b, .robot-log-note.none b, .robot-log-note.bad { color: var(--bad); }
+.robot-log-note.muted { color: var(--faint); }
+.robot-log-signals { margin-top: 8px; font-size: 14px; }
+.robot-log-signals summary { cursor: pointer; color: var(--muted); }
+.robot-log-signals .info-list { margin-top: 6px; max-height: 320px; overflow: auto; }
+.info-actions { margin-top: 10px; }
+.info-item.signal { display: flex; justify-content: space-between; gap: 16px; }
+.info-item.signal .mono { overflow-wrap: anywhere; min-width: 0; }
+.info-item.signal .faint { flex: none; white-space: nowrap; }
+
 /* ---------- Key hints at the bottom of every screen ---------- */
 .keybar {
   position: sticky; bottom: 0; z-index: 4; margin-top: auto;

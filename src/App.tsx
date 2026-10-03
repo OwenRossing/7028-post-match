@@ -9,7 +9,7 @@ import type { Tab } from './components/viewer/types';
 import { Welcome } from './components/Welcome';
 import { classifyHistory, usesDemoHistory } from './lib/baseline';
 import { filesFromDrop } from './lib/folder';
-import { isLogFile, sortEntries, type LogEntry } from './lib/library';
+import { fileKind, isLogFile, sortEntries, type LogEntry } from './lib/library';
 import { updateSettings, useSettings } from './lib/settings';
 import { readChartTheme, resolvedDark, type ChartTheme } from './lib/theme';
 import { useLibrary } from './lib/useLibrary';
@@ -41,6 +41,7 @@ export default function App() {
   const [mobileSidebar, setMobileSidebar] = useState(false);
   const [headSlot, setHeadSlot] = useState<HTMLDivElement | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  const extraInput = useRef<HTMLInputElement>(null);
 
   // ---------- Theme ----------
   const [dark, setDark] = useState(() => resolvedDark(settings.theme));
@@ -97,25 +98,60 @@ export default function App() {
     return { title: selected.summary?.title ?? selected.key, demo: usesDemoHistory(selected, points.length), status };
   }, [entries, selected, view, parsed.key, parsed.data]);
 
+  /** Adds roboRIO / CTRE logs: to `target` when given, otherwise to the matches their own clock says they cover. */
+  const addExtras = useCallback(
+    async (files: File[], target?: string) => {
+      let res = await library.attachExtras(files, target);
+      // Nothing to go by in the log itself: if a match is open, that is the likeliest home.
+      if (!target && res.unplaced.length && selectedKey) {
+        const names = new Set(res.unplaced);
+        const second = await library.attachExtras(files.filter((f) => names.has(f.name)), selectedKey);
+        res = { ...res, attached: [...res.attached, ...second.attached], unplaced: [], rejected: [...res.rejected, ...second.rejected] };
+        if (second.attached.length) toast("Couldn't tell which match it belongs to", `Added ${[...names].join(', ')} to the open match. Check Info to see if it lines up.`);
+      }
+      for (const r of res.rejected.slice(0, 2)) toast(r.name, r.reason, 'error');
+      if (res.unplaced.length)
+        toast(
+          "Couldn't tell which match this log belongs to",
+          `${res.unplaced.join(', ')} has no clock to go by. Open the match, then use Add logs in the download menu at the top.`,
+        );
+      const keys = [...new Set(res.attached.flatMap((a) => a.keys))];
+      if (!keys.length) return;
+      const title = (k: string) => library.entries.get(k)?.summary?.title ?? k;
+      toast(
+        keys.length === 1 ? `Added to ${title(keys[0])}` : `Added to ${keys.length} matches`,
+        keys.length === 1 ? res.attached.map((a) => a.name).join(', ') : 'The log covers all of them.',
+        'success',
+      );
+      if (!selectedKey || !keys.includes(selectedKey)) openKey(keys[0], 'info');
+    },
+    [library, selectedKey, openKey, toast],
+  );
+
   const addFiles = useCallback(
     async (files: File[]) => {
       const logs = files.filter((f) => isLogFile(f.name));
-      if (!logs.length) {
-        toast('No DS logs found', 'Pick .dslog and/or .dsevents files from the Driver Station log folder.', 'error');
+      const extras = files.filter((f) => fileKind(f.name) === 'wpilog' || fileKind(f.name) === 'hoot');
+      if (!logs.length && !extras.length) {
+        toast('No logs found', 'Pick .dslog / .dsevents files from the Driver Station, or .wpilog files from the robot.', 'error');
         return;
       }
-      const added = await library.addFiles(logs);
-      const newest = [...added].sort((a, b) => b.startTime - a.startTime)[0];
-      if (newest) openKey(newest.key, 'board');
-      if (added.length > 1) toast(`Added ${added.length} logs`, 'They are listed in the library on the left.', 'success');
-      const unpaired = added.filter((e) => !e.dslog || !e.dsevents);
-      if (added.length === 1 && unpaired.length === 1)
-        toast(
-          `Only the ${unpaired[0].dslog ? '.dslog' : '.dsevents'} was opened`,
-          `Add ${unpaired[0].key}.${unpaired[0].dslog ? 'dsevents' : 'dslog'} too for ${unpaired[0].dslog ? 'messages and match info' : 'graphs'}.`,
-        );
+      if (logs.length) {
+        const added = await library.addFiles(logs);
+        const newest = [...added].sort((a, b) => b.startTime - a.startTime)[0];
+        if (newest) openKey(newest.key, 'board');
+        if (added.length > 1) toast(`Added ${added.length} logs`, 'They are listed in the library on the left.', 'success');
+        const unpaired = added.filter((e) => !e.dslog || !e.dsevents);
+        if (added.length === 1 && unpaired.length === 1)
+          toast(
+            `Only the ${unpaired[0].dslog ? '.dslog' : '.dsevents'} was opened`,
+            `Add ${unpaired[0].key}.${unpaired[0].dslog ? 'dsevents' : 'dslog'} too for ${unpaired[0].dslog ? 'messages and match info' : 'graphs'}.`,
+          );
+      }
+      // after the DS logs, so a log dropped together with its match can find it
+      if (extras.length) await addExtras(extras);
     },
-    [library, openKey, toast],
+    [library, openKey, toast, addExtras],
   );
 
   const openLatestMatch = useCallback(() => {
@@ -303,6 +339,8 @@ export default function App() {
               tab={tab}
               setTab={setTab}
               headSlot={headSlot}
+              onAddLogs={() => extraInput.current?.click()}
+              onRemoveLog={(name) => void library.detachExtra(selected.key, name)}
               onCompare={() => {
                 setCompareSelecting(true);
                 setCompareKeys([selected.key]);
@@ -336,12 +374,24 @@ export default function App() {
         ref={fileInput}
         type="file"
         multiple
-        accept=".dslog,.dsevents"
+        accept=".dslog,.dsevents,.wpilog,.hoot"
         style={{ display: 'none' }}
         onChange={(e) => {
           const files = [...(e.target.files ?? [])];
           e.target.value = '';
           if (files.length) void addFiles(files);
+        }}
+      />
+      <input
+        ref={extraInput}
+        type="file"
+        multiple
+        accept=".wpilog,.hoot"
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          const files = [...(e.target.files ?? [])];
+          e.target.value = '';
+          if (files.length && selectedKey) void addExtras(files, selectedKey);
         }}
       />
 

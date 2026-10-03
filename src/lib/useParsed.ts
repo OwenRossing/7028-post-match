@@ -10,8 +10,12 @@ export function loadParsed(entry: LogEntry): Promise<ParsedLog> {
   let p = cache.get(key);
   if (!p) {
     p = (async () => {
-      const [a, b] = await Promise.all([entry.dslog?.read(), entry.dsevents?.read()]);
-      return parseLog(a, b);
+      const [a, b, x] = await Promise.all([
+        entry.dslog?.read(),
+        entry.dsevents?.read(),
+        Promise.all((entry.extras ?? []).map(async (e) => ({ name: e.file.name, kind: e.kind, data: await e.file.read() }))),
+      ]);
+      return parseLog(a, b, x);
     })();
     cache.set(key, p);
     p.catch(() => cache.delete(key));

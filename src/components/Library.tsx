@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { MIN_HISTORY, type HistoryStatus } from '../lib/baseline';
-import { versionKey, type LogEntry } from '../lib/library';
+import { summaryKeyOf, type LogEntry } from '../lib/library';
 import { fmtClock, fmtDate, fmtSpan } from '../lib/time';
 import { Icon } from './Icon';
 
@@ -288,7 +288,7 @@ function Row({
   onClick: () => void;
 }) {
   const s = e.summary;
-  const pending = e.summaryKey !== versionKey(e) && !e.summaryError;
+  const pending = e.summaryKey !== summaryKeyOf(e) && !e.summaryError;
   const live = (e.source === 'folder' || e.source === 'companion') && Date.now() - (e.dslog?.mtime ?? 0) < 20000;
   const idle = s && !s.enabledTime && !s.isMatch;
   return (
@@ -314,7 +314,7 @@ function Row({
       {showFile && (
         <div className="lib-file mono" title="The files read for this match">
           {e.key}
-          <span>{[e.dslog && '.dslog', e.dsevents && '.dsevents'].filter(Boolean).join(' + ')}</span>
+          <span>{[e.dslog && '.dslog', e.dsevents && '.dsevents', ...(e.extras ?? []).map((x) => `.${x.kind}`)].filter(Boolean).join(' + ')}</span>
         </div>
       )}
       <div className="meta">
@@ -328,6 +328,7 @@ function Row({
               s.verdict !== 'ok' && `${s.problemCount} issue${s.problemCount === 1 ? '' : 's'}`,
               !s.hasDslog && 'messages only',
               !s.hasEvents && 'no messages',
+              e.extras?.length ? `+${e.extras.length} robot log${e.extras.length === 1 ? '' : 's'}` : '',
             ]
               .filter(Boolean)
               .join('  ·  ')}

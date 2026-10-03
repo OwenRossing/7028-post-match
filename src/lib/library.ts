@@ -10,11 +10,25 @@ export interface FileRef {
   read: () => Promise<ArrayBuffer>;
 }
 
+/** Logs from outside the Driver Station that can be added to a match. A .hoot has to be converted to .wpilog first. */
+export type ExtraKind = 'wpilog' | 'hoot';
+
+export interface ExtraFile {
+  kind: ExtraKind;
+  file: FileRef;
+}
+
+/**
+ * One match and everything known about it. The Driver Station's .dslog/.dsevents give it its identity (the key);
+ * roboRIO and CTRE logs are attached to it, now or any time later, and are read together with them.
+ */
 export interface LogEntry {
   key: string;
   source: SourceKind;
   dslog?: FileRef;
   dsevents?: FileRef;
+  /** Attached logs, oldest first. Kept apart from the DS files: they survive the DS folder being rescanned. */
+  extras?: ExtraFile[];
   /** Unix seconds, from the file name (local time) or the file's modified time. */
   startTime: number;
   summary?: LogSummary;
@@ -24,8 +38,17 @@ export interface LogEntry {
 
 const SOURCE_RANK: Record<SourceKind, number> = { folder: 0, companion: 1, saved: 2, upload: 3, sample: 4 };
 
+/** A Driver Station file: what gives a match its name. */
 export function isLogFile(name: string): boolean {
   return /\.(dslog|dsevents)$/i.test(name);
+}
+
+/** What a dropped file is, by its extension. */
+export function fileKind(name: string): 'ds' | ExtraKind | null {
+  if (isLogFile(name)) return 'ds';
+  if (/\.wpilog$/i.test(name)) return 'wpilog';
+  if (/\.hoot$/i.test(name)) return 'hoot';
+  return null;
 }
 
 export function baseName(name: string): string {
@@ -50,10 +73,17 @@ export function fileRefFromFile(file: File): FileRef {
   return { name: file.name, size: file.size, mtime: file.lastModified, read: () => file.arrayBuffer() };
 }
 
-/** Identifies a specific version of an entry's files (changes when a live log grows). */
+const fileSig = (r?: FileRef) => (r ? `${r.size}@${r.mtime}` : '-');
+
+/** Identifies the Driver Station files of an entry (changes when a live log grows). Library summaries are keyed by this. */
+export function summaryKeyOf(e: LogEntry): string {
+  return `${e.key}|${fileSig(e.dslog)}|${fileSig(e.dsevents)}`;
+}
+
+/** Identifies everything read for an entry: the DS files and every attached log. Parsed data is cached under this. */
 export function versionKey(e: LogEntry): string {
-  const f = (r?: FileRef) => (r ? `${r.size}@${r.mtime}` : '-');
-  return `${e.key}|${f(e.dslog)}|${f(e.dsevents)}`;
+  const x = (e.extras ?? []).map((a) => `${a.file.name}:${fileSig(a.file)}`).join(',');
+  return x ? `${summaryKeyOf(e)}|${x}` : summaryKeyOf(e);
 }
 
 /**
@@ -75,7 +105,7 @@ export function mergeEntries(current: Map<string, LogEntry>, incoming: LogEntry[
         dslog: inc.dslog ?? cur.dslog,
         dsevents: inc.dsevents ?? cur.dsevents,
       };
-      if (versionKey(merged) === cur.summaryKey) {
+      if (summaryKeyOf(merged) === cur.summaryKey) {
         merged.summary = cur.summary;
         merged.summaryKey = cur.summaryKey;
       } else {

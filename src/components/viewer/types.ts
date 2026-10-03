@@ -40,6 +40,10 @@ export interface ViewCtx {
   jumpTo: (t: number, opts?: JumpOpts) => void;
   showEvents: (filter: EventFilter) => void;
   setTab: (tab: Tab) => void;
+  /** Asks for roboRIO / CTRE logs to add to this match. */
+  addLogs: () => void;
+  /** Takes an attached log off this match. */
+  removeLog: (name: string) => void;
 }
 
 export function useGroupValue<T>(group: ChartGroup, channel: 'range' | 'hover' | 'pin', read: () => T): T {
