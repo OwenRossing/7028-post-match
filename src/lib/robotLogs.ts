@@ -6,6 +6,7 @@
 // joins it and goes away.
 
 import { planPlacements, type Candidate, type KnownLog, type Move, type RioAnchors } from './aggregate';
+import type { HootProbe } from './hoot';
 import { idb } from './idb';
 import { candidateOf, robotCandidateOf, type ExtraFile, type ExtraKind, type FileRef, type LogEntry } from './library';
 
@@ -19,6 +20,8 @@ interface SavedExtra {
   role?: string;
   anchors?: RioAnchors;
   startUnix?: number;
+  decoded?: boolean;
+  hoot?: HootProbe;
 }
 
 interface RobotMatch {
@@ -54,7 +57,10 @@ export class RobotLogStore {
   async load(): Promise<void> {
     const saved = (await this.db.get<Record<string, SavedExtra[]>>('kv', 'attachments')) ?? {};
     for (const [key, list] of Object.entries(saved))
-      this.attached.set(key, list.map((m) => ({ kind: m.kind, file: this.ref(m), role: m.role, anchors: m.anchors, startUnix: m.startUnix })));
+      this.attached.set(
+        key,
+        list.map((m) => ({ kind: m.kind, file: this.ref(m), role: m.role, anchors: m.anchors, startUnix: m.startUnix, decoded: m.decoded, hoot: m.hoot })),
+      );
     const robot = (await this.db.get<Record<string, RobotMatch>>('kv', 'robotMatches')) ?? {};
     for (const [key, m] of Object.entries(robot)) this.matches.set(key, m);
     for (const d of (await this.db.get<string[]>('kv', 'dismissed')) ?? []) this.dismissed.add(d);
@@ -67,7 +73,17 @@ export class RobotLogStore {
       const inUse = new Set<string>();
       for (const [key, list] of this.attached) {
         if (skip(key)) continue;
-        out[key] = list.map((x) => ({ kind: x.kind, name: x.file.name, size: x.file.size, mtime: x.file.mtime, role: x.role, anchors: x.anchors, startUnix: x.startUnix }));
+        out[key] = list.map((x) => ({
+          kind: x.kind,
+          name: x.file.name,
+          size: x.file.size,
+          mtime: x.file.mtime,
+          role: x.role,
+          anchors: x.anchors,
+          startUnix: x.startUnix,
+          decoded: x.decoded,
+          hoot: x.hoot,
+        }));
         list.forEach((x) => inUse.add(x.file.name));
       }
       await this.db.set('kv', 'attachments', out);

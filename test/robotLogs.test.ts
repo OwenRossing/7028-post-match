@@ -147,6 +147,31 @@ describe('RobotLogStore', () => {
     expect(b.isDismissed('x.wpilog', 'q22')).toBe(true);
   });
 
+  it('keeps a .hoot with its description and places it by the match in its name', async () => {
+    const db = fakeDb();
+    const s = new RobotLogStore(db);
+    const hoot = { size: 80_000_000, magic: '48 4f 4f 54', head: [], tail: [], samples: [], entropy: { head: 5, middle: 5, tail: 5 }, zeroFraction: 0.3, strings: [], name: { ids: [] } };
+    const anchors = { first: 0, last: 0, enabled: [], lines: [], ids: [{ type: 'qualification' as const, number: 22 }] };
+    // no Driver Station log yet: the .hoot is a match of its own
+    s.addRobotMatch('robot:x.hoot', { startTime: 1, title: 'Qualification 22' });
+    s.add('robot:x.hoot', { kind: 'hoot', file: ref('x.hoot'), role: 'CTRE Phoenix', decoded: false, hoot, anchors });
+
+    // then two DS logs arrive: it joins the match its name says, and not the other
+    const q22 = dsMatch('q22', 0);
+    q22.summary = { ...q22.summary!, fms: true, matchType: 'Qualification', matchNumber: 22 };
+    const q23 = dsMatch('q23', 600);
+    q23.summary = { ...q23.summary!, fms: true, matchType: 'Qualification', matchNumber: 23 };
+    const plan = s.joinPlan([q22, q23]);
+    expect(plan.adds.map((a) => a.key)).toEqual(['q22']);
+    expect(plan.absorbed).toEqual(['robot:x.hoot']);
+
+    // and what it was described as survives a reload
+    await s.save();
+    const b = new RobotLogStore(db);
+    await b.load();
+    expect(b.extrasFor('robot:x.hoot')![0]).toMatchObject({ kind: 'hoot', decoded: false, hoot: { size: 80_000_000 } });
+  });
+
   it('does not save what it was told to skip, and frees files nothing uses any more', async () => {
     const db = fakeDb();
     const s = new RobotLogStore(db);

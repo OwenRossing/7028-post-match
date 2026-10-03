@@ -13,7 +13,11 @@ export function useProbe(entry: LogEntry): ExtraInfo[] | null {
     let cancelled = false;
     let p = cache.get(key);
     if (!p) {
-      p = Promise.all((entry.extras ?? []).map(async (x) => ({ name: x.file.name, kind: x.kind, data: await x.file.read() }))).then(probeExtras);
+      p = Promise.all(
+        (entry.extras ?? []).map(async (x) =>
+          x.kind === 'hoot' && x.hoot ? { name: x.file.name, kind: x.kind, data: new ArrayBuffer(0), hoot: x.hoot } : { name: x.file.name, kind: x.kind, data: await x.file.read() },
+        ),
+      ).then(probeExtras);
       cache.set(key, p);
       p.catch(() => cache.delete(key));
       while (cache.size > 8) cache.delete(cache.keys().next().value!);

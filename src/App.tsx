@@ -121,6 +121,8 @@ export default function App() {
           'It fits no Driver Station log yet. Add the .dslog and .dsevents any time and they will join it if they belong together.',
           'success',
         );
+      if (res.attached.some((a) => /\.hoot$/i.test(a.name)))
+        toast('Saved the .hoot', "PitView can't read its signals yet. On the match's Info page, press Copy hoot diagnostics and paste the text in the chat.", 'info');
       if (keys.length && (!selectedKey || !keys.includes(selectedKey))) openKey(keys[0], 'info');
     },
     [library, selectedKey, openKey, toast],

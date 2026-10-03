@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { DsAnchor } from '../src/lib/aggregate';
-import { describeExtra, HOOT_HELP, logRole } from '../src/lib/extras';
+import { describeExtra, HOOT_NOTE, logRole } from '../src/lib/extras';
+import { probeHoot } from '../src/lib/hoot';
 import { parseWPILog } from '../src/lib/wpilog';
 import { WPILogWriter } from './helpers/wpilog-writer';
 
@@ -39,10 +40,21 @@ describe('describeExtra', () => {
     expect(info.alignment!.offset).toBeCloseTo(-7, 6);
   });
 
-  it('explains a .hoot instead of guessing at it', () => {
-    const info = describeExtra('robot.hoot', 'hoot', new ArrayBuffer(100), null);
-    expect(info).toMatchObject({ ok: false, error: HOOT_HELP });
-    expect(HOOT_HELP).toMatch(/Owlet/);
+  it('keeps a .hoot and describes it instead of guessing at its contents', () => {
+    const bytes = new TextEncoder().encode('HOOT\0\0\0\0TalonFX-1/Position\0\0\0').buffer as ArrayBuffer;
+    const info = describeExtra('MNST_Q22_rio_2026.hoot', 'hoot', bytes, null);
+    expect(info).toMatchObject({ ok: true, decoded: false, role: 'CTRE Phoenix', note: HOOT_NOTE, signals: [] });
+    expect(info.hoot!.strings.map((s) => s.text)).toContain('TalonFX-1/Position');
+    expect(HOOT_NOTE).toMatch(/Owlet/);
+    // the only thing to place it by is the match CTRE put in the name
+    expect(info.anchors!.ids).toEqual([{ type: 'qualification', number: 22 }]);
+  });
+
+  it('does not read a .hoot again once it has been described', () => {
+    const known = probeHoot(new TextEncoder().encode('some hoot bytes here, long enough'), 'x.hoot');
+    const info = describeExtra('x.hoot', 'hoot', new ArrayBuffer(0), null, known);
+    expect(info.hoot).toBe(known);
+    expect(info.size).toBe(known.size);
   });
 
   it('refuses files that are not wpilogs', () => {

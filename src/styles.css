@@ -2467,6 +2467,7 @@ h3 {
 .chips { display: inline-flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 .chip { font: inherit; font-size: 11px; font-weight: 600; line-height: 1; padding: 3px 8px; border-radius: 999px; border: 1px solid transparent; white-space: nowrap; }
 .chip.on { background: var(--good-weak); color: var(--good); }
+.chip.pending { background: var(--warn-weak); color: var(--warn); }
 .chip.missing { background: none; border: 1px dashed var(--border-strong); color: var(--faint); font-weight: 500; }
 .chip.add { cursor: pointer; }
 .chip.add:hover { color: var(--accent); border-color: var(--accent); }

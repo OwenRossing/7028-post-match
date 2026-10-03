@@ -68,6 +68,18 @@ describe('robotLogDiagnostics', () => {
     expect(text).toMatch(/lined up with the match: not checked/);
   });
 
+  it('describes a .hoot well enough to work out its layout, without including the file', () => {
+    const bytes = new TextEncoder().encode('HOOT\x01\0\0\0' + 'TalonFX-1/Position\0'.repeat(3) + 'x'.repeat(5000)).buffer as ArrayBuffer;
+    const info = describeExtra('rio_2026-05-16_16-38-21.hoot', 'hoot', bytes, null);
+    const text = robotLogDiagnostics([info]);
+    expect(text).toMatch(/robot log rio_2026-05-16_16-38-21\.hoot: CTRE Phoenix · 0\.0 MB/);
+    expect(text).toMatch(/\.hoot: \d+ bytes · not decoded/);
+    expect(text).toContain('first bytes: 48 4f 4f 54 01 00 00 00');
+    expect(text).toMatch(/entropy bits\/byte/);
+    expect(text).toContain('TalonFX-1/Position | 3');
+    expect(text.length).toBeLessThan(30000); // small enough to paste
+  });
+
   it('says so when a log is unreadable, and caps a very long signal list', () => {
     const bad = describeExtra('x.wpilog', 'wpilog', new TextEncoder().encode('nope nope nope').buffer as ArrayBuffer, null);
     expect(robotLogDiagnostics([bad])).toMatch(/unreadable: .*WPILOG/);

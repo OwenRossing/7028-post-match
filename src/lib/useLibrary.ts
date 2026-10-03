@@ -12,7 +12,6 @@ import {
 } from './folder';
 import { idb } from './idb';
 import { planPlacements, robotMatchTitle } from './aggregate';
-import { HOOT_HELP } from './extras';
 import {
   candidateOf,
   fileKind,
@@ -166,16 +165,13 @@ export function useLibrary(opts: {
   const attachExtras = useCallback(
     async (files: File[], target?: string): Promise<AttachResult> => {
       const result: AttachResult = { attached: [], rejected: [] };
-      const wanted: File[] = [];
-      for (const f of files) {
-        const kind = fileKind(f.name);
-        if (kind === 'hoot') result.rejected.push({ name: f.name, reason: HOOT_HELP });
-        else if (kind === 'wpilog') wanted.push(f);
-      }
+      const wanted = files.filter((f) => fileKind(f.name) === 'wpilog' || fileKind(f.name) === 'hoot');
       if (!wanted.length) return result;
 
       // Look inside each log first: refuses unreadable ones and gets what is needed to place them.
-      const payloads = await Promise.all(wanted.map(async (f) => ({ name: f.name, kind: 'wpilog' as const, data: await f.arrayBuffer() })));
+      const payloads = await Promise.all(
+        wanted.map(async (f) => ({ name: f.name, kind: fileKind(f.name) === 'hoot' ? ('hoot' as const) : ('wpilog' as const), data: await f.arrayBuffer() })),
+      );
       const probed = await probeExtras(payloads.map((p) => ({ ...p, data: p.data.slice(0) })));
       if (!target) {
         // a match dropped together with its robot log is still being read, and its length is needed to place the log
@@ -199,7 +195,16 @@ export function useLibrary(opts: {
             optsRef.current.onError('Could not save the log offline', 'Browser storage is full or unavailable. It is attached for this visit only.');
           }
         }
-        const extra = { kind: 'wpilog' as const, file, role: info.role, anchors: info.anchors, startUnix: info.startUnix };
+        const extra = {
+          kind: payloads[i].kind,
+          file,
+          role: info.role,
+          anchors: info.anchors,
+          // a log with no time of its own is put in the day its file was written
+          startUnix: info.startUnix ?? (payloads[i].kind === 'hoot' ? f.lastModified / 1000 : undefined),
+          decoded: info.decoded,
+          hoot: info.hoot,
+        };
 
         let keys: string[];
         let created = false;
