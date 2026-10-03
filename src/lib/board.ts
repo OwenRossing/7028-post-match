@@ -293,11 +293,13 @@ function powerColumn(log: DSLog | null, analysis: Analysis, stats: Stats, range:
   else
     rows.push({
       id: 'power.noPd',
-      label: 'Channels: not recorded',
+      label: log.pdFrozen ? 'Channels: board not answering' : 'Channels: not recorded',
       value: NaN,
       unit: '',
       digits: 0,
-      hint: "The Driver Station recorded no power distribution board in this log, so there are no per-channel currents here. It usually only records a REV PDH when the robot's code creates a PowerDistribution object. The Graphs page says what is in the log, and ranks motor currents from attached robot logs.",
+      hint: log.pdFrozen
+        ? 'The Driver Station logged a power distribution board, but the same all-zero reading in every record: the roboRIO was not getting readings from it. Channels are left out instead of drawn as zeros. The Graphs page says what to check, and ranks motor currents from attached robot logs.'
+        : "The Driver Station recorded no power distribution board in this log, so there are no per-channel currents here. It usually only records a REV PDH when the robot's code creates a PowerDistribution object. The Graphs page says what is in the log, and ranks motor currents from attached robot logs.",
     });
   rows.push({
     id: 'power.minVoltage',

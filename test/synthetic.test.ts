@@ -113,6 +113,51 @@ describe('dslog decoding (synthetic)', () => {
     expect(log.currents[0][2]).toBeCloseTo(10, 3);
   });
 
+  describe('a board that never answers', () => {
+    // What a real log had in every record: CAN id 1, all ten-bit currents zero but the unused bits set, temperature 255
+    const PLACEHOLDER = '01000000c0000000c0000000c0000000c0000000c0000000c00000f000000000ff';
+    const placeholder = (n: number, volts: (i: number) => number) => {
+      const out: number[] = [];
+      for (let i = 0; i < n; i++) {
+        out.push(...record({ flags: TELEOP, volts: volts(i), pd: 'rev' }).slice(0, 14), ...Buffer.from(PLACEHOLDER, 'hex'));
+      }
+      return new Uint8Array([...header(1_700_000_000), ...out]);
+    };
+
+    it('leaves the channels out when the same all-zero reading repeats, and says why', () => {
+      const log = parseDSLog(placeholder(400, (i) => 12 - (i % 100) / 20));
+      expect(log.count).toBe(400);
+      expect(log.pdFrozen).toEqual({ records: 400, temp: 255 });
+      expect(log.channelCount).toBe(0);
+      expect(log.currents).toEqual([]);
+      expect(log.totalCurrent.every(Number.isNaN)).toBe(true);
+      expect(log.pdCanId).toBe(1);
+      expect(computeStats(log, null, analyze(log, null), analyze(log, null).focus).current.available).toBe(false);
+    });
+
+    it('keeps a board that is quiet but alive (its readings change a little)', () => {
+      const out: number[] = [];
+      for (let i = 0; i < 400; i++) out.push(...record({ flags: TELEOP, volts: 12.4, pd: 'rev', currents: i % 7 === 0 ? [0.125] : [0] }));
+      const log = parseDSLog(new Uint8Array([...header(1_700_000_000), ...out]));
+      expect(log.pdFrozen).toBeNull();
+      expect(log.channelCount).toBe(24);
+    });
+
+    it('does not call a short log frozen: five seconds of identical readings are needed', () => {
+      const log = parseDSLog(placeholder(100, () => 12));
+      expect(log.pdFrozen).toBeNull();
+      expect(log.channelCount).toBe(24);
+    });
+
+    it('does not discard a steady reading that is not zero', () => {
+      const out: number[] = [];
+      for (let i = 0; i < 400; i++) out.push(...record({ flags: TELEOP, volts: 12.4, pd: 'rev', currents: [5] }));
+      const log = parseDSLog(new Uint8Array([...header(1_700_000_000), ...out]));
+      expect(log.pdFrozen).toBeNull();
+      expect(log.currents[0][0]).toBeCloseTo(5, 3);
+    });
+  });
+
   it('rejects old v3 logs with a helpful message', () => {
     const bytes = new Uint8Array(header(0));
     new DataView(bytes.buffer).setInt32(0, 3);

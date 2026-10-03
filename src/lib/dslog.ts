@@ -78,7 +78,16 @@ export interface DSLog {
   typeBytes: Record<number, number>;
   /** The raw bytes of the first record that had power distribution data, for diagnosing a decode that looks wrong. */
   pdSample?: { index: number; bytes: number[] };
+  /**
+   * Set when the board's reading never changed: the same bytes in every connected record, every channel at 0 A. A live board
+   * does not hold still like that (not through a brownout), so it is a placeholder the roboRIO sent because it was not getting
+   * readings from the board. The channels are then left out (`channelCount` 0, no currents) rather than graphed as zeros.
+   */
+  pdFrozen: { records: number; temp: number } | null;
 }
+
+/** A reading that never changes for this many connected records (5 s) is not a live one. */
+const FROZEN_MIN = 250;
 
 function recordSize(typeByte: number): number {
   if (typeByte === REV_ID) return BASE_RECORD + REV_SIZE;
@@ -141,6 +150,10 @@ export function parseDSLog(bytes: Uint8Array): DSLog {
   const pdTemp = new Float32Array(count).fill(NaN);
   let pdCanId: number | null = null;
   let pdSample: DSLog['pdSample'];
+  let pdRecords = 0;
+  let pdChanged = false;
+  let firstPd: Uint8Array | undefined;
+  let firstPdAt = -1;
 
   // Pass 2: decode.
   pos = HEADER_SIZE;
@@ -162,6 +175,12 @@ export function parseDSLog(bytes: Uint8Array): DSLog {
 
     const type = bytes[pos + 13];
     const pd = pos + BASE_RECORD;
+    if (comms && (type === REV_ID || type === CTRE_ID)) {
+      const payload = bytes.subarray(pd, pos + recordSize(type));
+      pdRecords++;
+      if (!firstPd) [firstPd, firstPdAt] = [payload, i];
+      else if (!pdChanged && (payload.length !== firstPd.length || payload.some((v, k) => v !== firstPd![k]))) pdChanged = true;
+    }
     if (!comms) {
       // Stale power distribution data is repeated while disconnected; leave it as NaN.
     } else if (type === REV_ID) {
@@ -206,6 +225,19 @@ export function parseDSLog(bytes: Uint8Array): DSLog {
     pos += recordSize(type);
   }
 
+  // A board that reports the same thing in every record, all zeros, is not being read: keep nothing of it
+  let pdFrozen: DSLog['pdFrozen'] = null;
+  let kept = currents;
+  let keptCount = channelCount;
+  if (pdRecords >= FROZEN_MIN && !pdChanged && firstPdAt >= 0 && totalCurrent[firstPdAt] === 0) {
+    pdFrozen = { records: pdRecords, temp: pdTemp[firstPdAt] };
+    kept = [];
+    keptCount = 0;
+    totalCurrent.fill(NaN);
+    pdTemp.fill(NaN);
+    pdKind.fill(0);
+  }
+
   return {
     version,
     startTime,
@@ -224,13 +256,14 @@ export function parseDSLog(bytes: Uint8Array): DSLog {
     pdKind,
     pdType,
     pdCanId,
-    channelCount,
-    currents,
+    channelCount: keptCount,
+    currents: kept,
     totalCurrent,
     pdTemp,
     truncated,
     typeBytes,
     pdSample,
+    pdFrozen,
   };
 }
 

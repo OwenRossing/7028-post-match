@@ -4,7 +4,7 @@ import { BROWNOUT_VOLTS, type ChartId, type Span } from '../../lib/analysis';
 import type { DSEvent, EventKind } from '../../lib/dsevents';
 import type { DSLog } from '../../lib/dslog';
 import { chartsToPng, download, safeFileName } from '../../lib/export';
-import { drawAt, powerReport, powerSources, totalNear } from '../../lib/power';
+import { drawAt, pdStatus, powerReport, powerSources, totalNear } from '../../lib/power';
 import { channelName, updateSettings, type TimeMode } from '../../lib/settings';
 import type { RobotSignal } from '../../lib/robotSeries';
 import { channelColor } from '../../lib/theme';
@@ -748,8 +748,9 @@ export function Graphs({
                 {rows.map((s) => [signalRow(s), s.id === 'total' && log.channelCount ? channelsGroup() : null])}
                 {sec === 'Power' && !log.channelCount && (
                   <p className="g-note">
-                    No power distribution data in this Driver Station log, so there are no per-channel currents here. The Driver Station only records them when the robot's
-                    code is reading the power distribution board (WPILib's PowerDistribution class) and the board is on the CAN bus.{' '}
+                    {pdStatus(log).kind === 'frozen'
+                      ? `${pdStatus(log).text} `
+                      : "No power distribution data in this Driver Station log, so there are no per-channel currents here. The Driver Station only records them when the robot's code is reading the power distribution board (WPILib's PowerDistribution class) and the board is on the CAN bus. "}
                     {motors.length ? 'The attached robot logs have motor currents of their own, under Motors.' : "Attach the robot's .wpilog, or a converted .hoot, to see motor currents from it."}
                   </p>
                 )}

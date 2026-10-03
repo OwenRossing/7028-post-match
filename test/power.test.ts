@@ -1,7 +1,7 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { FLAG, parseDSLog, type DSLog } from '../src/lib/dslog';
-import { drawAt, pdStatus, powerReport, powerSources, sortRows } from '../src/lib/power';
+import { canStaleCount, drawAt, pdStatus, powerReport, powerSources, sortRows } from '../src/lib/power';
 import type { RobotSignal } from '../src/lib/robotSeries';
 
 const arr = (...v: number[]) => Float32Array.from(v);
@@ -152,6 +152,36 @@ describe('what the Driver Station log says about the board', () => {
   it('says so when the board was recorded but nothing drew a full amp', () => {
     const log = fake(10, [0, 9], { typeBytes: { 33: 10 }, pdType: 'rev', channelCount: 1, currents: [new Float32Array(10).fill(0.3)] });
     expect(pdStatus(log).kind).toBe('idle');
+  });
+
+  it('says a board that never changed is a placeholder, with the battery range and the board', () => {
+    const volts = Float32Array.from({ length: 1000 }, (_, i) => 13.5 - (i / 999) * 7.7);
+    const s = pdStatus(fake(1000, [0, 999], { typeBytes: { 33: 1000 }, pdType: 'rev', pdCanId: 1, voltage: volts, pdFrozen: { records: 1000, temp: 255 } }));
+    expect(s.kind).toBe('frozen');
+    expect(s.text).toMatch(/identical PDH reading \(CAN ID 1\) in all 1,000 records while connected: every channel 0 A and board temperature 255 °C, even while the battery went from 13\.5 V down to 5\.8 V/);
+    expect(s.text).toMatch(/leaves the channels out instead of drawing zeros/);
+  });
+
+  it('does not mention a battery swing that was not there', () => {
+    const s = pdStatus(fake(1000, [0, 999], { pdType: 'ctre', pdCanId: 0, pdFrozen: { records: 1000, temp: NaN } }));
+    expect(s.text).toMatch(/identical PDP reading \(CAN ID 0\) in all 1,000 records while connected: every channel 0 A\. A live board/);
+  });
+
+  it('counts the CAN reads that timed out', () => {
+    const ev = (text: string) => ({ text }) as never;
+    expect(canStaleCount([ev('CAN message is stale, data is valid but old. Check the CAN bus wiring'), ev('CAN frame not received/too-stale. Check'), ev('Loop time of 0.02s overrun')])).toBe(2);
+    expect(canStaleCount(undefined)).toBe(0);
+  });
+
+  const shop = '2026_10_03 13_09_44 Sat.dslog';
+  it.skipIf(!existsSync(shop))('reads the 2026-10-03 shop log (a PDH that never answered) as a placeholder, not as 0 A', () => {
+    const log = parseDSLog(new Uint8Array(readFileSync(shop)));
+    expect(log.typeBytes[33]).toBe(log.count);
+    expect(log.pdFrozen).toMatchObject({ records: 17404, temp: 255 });
+    expect(log.channelCount).toBe(0);
+    const s = pdStatus(log);
+    expect(s.kind).toBe('frozen');
+    expect(s.text).toMatch(/down to 5\.8 V/);
   });
 
   it('reads the real sample as recorded and used, and its low point and biggest draws are real', () => {

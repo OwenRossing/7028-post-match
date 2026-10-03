@@ -3,6 +3,7 @@
 // peak, and in total. Also says, when there is nothing to rank, what the Driver Station log did record and why.
 
 import { FLAG, type DSLog } from './dslog';
+import type { DSEvent } from './dsevents';
 import type { RobotSignal } from './robotSeries';
 
 export interface PowerSource {
@@ -133,9 +134,12 @@ export function drawAt(sources: PowerSource[], index: number, n = 3): { source: 
 }
 
 export interface PdStatus {
-  kind: 'ok' | 'none' | 'unknown' | 'idle';
+  kind: 'ok' | 'none' | 'unknown' | 'idle' | 'frozen';
   text: string;
 }
+
+/** Messages that say the roboRIO's CAN reads timed out ("CAN message is stale", "CAN frame not received/too-stale"). */
+export const canStaleCount = (events: readonly DSEvent[] | undefined): number => (events ?? []).filter((e) => /CAN (message|frame).*stale/i.test(e.text)).length;
 
 const KNOWN_PD = new Set([0, 25, 33]);
 
@@ -145,6 +149,21 @@ const KNOWN_PD = new Set([0, 25, 33]);
  * do about it.
  */
 export function pdStatus(log: DSLog): PdStatus {
+  if (log.pdFrozen) {
+    const name = log.pdType === 'ctre' ? 'PDP' : 'PDH';
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (let i = 0; i < log.count; i++) {
+      const v = log.voltage[i];
+      if (Number.isFinite(v)) [lo, hi] = [Math.min(lo, v), Math.max(hi, v)];
+    }
+    const temp = Number.isFinite(log.pdFrozen.temp) ? ` and board temperature ${log.pdFrozen.temp.toFixed(0)} °C` : '';
+    const moved = hi - lo >= 1 ? `, even while the battery went from ${hi.toFixed(1)} V down to ${lo.toFixed(1)} V` : '';
+    return {
+      kind: 'frozen',
+      text: `The Driver Station logged one identical ${name} reading${log.pdCanId != null ? ` (CAN ID ${log.pdCanId})` : ''} in all ${log.pdFrozen.records.toLocaleString('en-US')} records while connected: every channel 0 A${temp}${moved}. A live board does not hold still like that, so it is a placeholder: the roboRIO was not getting readings from the ${name}. PitView leaves the channels out instead of drawing zeros.`,
+    };
+  }
   const decoded = (log.typeBytes[33] ?? 0) + (log.typeBytes[25] ?? 0);
   const unknown = Object.entries(log.typeBytes).filter(([t]) => !KNOWN_PD.has(Number(t)));
   const unknownCount = unknown.reduce((a, [, c]) => a + c, 0);

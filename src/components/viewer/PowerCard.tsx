@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { diagnosticsText } from '../../lib/diagnostics';
-import { pdStatus, sortRows, type PowerReport, type PowerSort, type PowerSource } from '../../lib/power';
+import { canStaleCount, pdStatus, sortRows, type PowerReport, type PowerSort, type PowerSource } from '../../lib/power';
 import { CopyDiagnostics } from './CopyDiagnostics';
 import type { ViewCtx } from './types';
 
@@ -22,6 +22,7 @@ export function PowerCard({ ctx, sources, report }: { ctx: ViewCtx; sources: Pow
   const [by, setBy] = useState<PowerSort>('low');
   const [all, setAll] = useState(false);
   const pd = pdStatus(log);
+  const stale = canStaleCount(parsed.events?.events);
   const lowT = report.low ? report.low.index * log.period : null;
 
   if (!sources.length)
@@ -40,10 +41,27 @@ export function PowerCard({ ctx, sources, report }: { ctx: ViewCtx; sources: Pow
           </p>
           <p className="pw-line">To see which motor is pulling the power you need one of:</p>
           <ul className="pw-list">
-            <li>
-              <b>The power distribution board's channels.</b> With a REV PDH the Driver Station usually only records them when the robot's code creates a <code>PowerDistribution</code> object
-              (<code>new PowerDistribution(1, ModuleType.kRev)</code>, or <code>(0, ModuleType.kCTRE)</code> for a CTRE PDP) and the board is on the CAN bus.
-            </li>
+            {pd.kind === 'frozen' ? (
+              <li>
+                <b>Get the board talking.</b> The roboRIO knows a board is at CAN ID {log.pdCanId ?? '?'} but never got a reading from it. Check that the ID in the robot's code matches the board's
+                (<code>new PowerDistribution({log.pdCanId ?? 1}, ModuleType.kRev)</code>, or <code>(0, ModuleType.kCTRE)</code> for a CTRE PDP; the REV Hardware Client shows and sets a PDH's ID), that the CAN
+                wires to it are seated and the bus is terminated, and that the board appears in the REV Hardware Client.
+                {stale > 0 && (
+                  <>
+                    {' '}
+                    This log also has <b>{stale}</b> “CAN … stale / not received” messages: some device on the CAN bus is not answering (they do not say which).{' '}
+                    <button className="link" onClick={() => ctx.showEvents({ text: 'stale' })}>
+                      Show them
+                    </button>
+                  </>
+                )}
+              </li>
+            ) : (
+              <li>
+                <b>The power distribution board's channels.</b> With a REV PDH the Driver Station usually only records them when the robot's code creates a <code>PowerDistribution</code> object
+                (<code>new PowerDistribution(1, ModuleType.kRev)</code>, or <code>(0, ModuleType.kCTRE)</code> for a CTRE PDP) and the board is on the CAN bus.
+              </li>
+            )}
             <li>
               <b>Motor currents in a robot log:</b> Phoenix 6 SignalLogger (the <code>.hoot</code>, converted by Owlet; its <code>SupplyCurrent</code> is what each motor draws from the battery), or your robot code
               logging each controller's output current. Attach it to this match.

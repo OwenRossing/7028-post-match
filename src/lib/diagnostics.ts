@@ -100,7 +100,12 @@ export function diagnosticsText(entry: LogEntry, parsed: ParsedLog): string {
       out.push(`channels at 1 A or more at some point: ${used} of ${log.channelCount} · biggest single reading: ${n1(all.peak)} A on channel ${all.ch} (the heatmap colour scale)`);
       const t = stats(log.totalCurrent);
       out.push(`total current: peak ${n1(t.peak)} A, mean ${n1(t.mean)} A`);
-    } else out.push('no channels were decoded');
+    } else
+      out.push(
+        log.pdFrozen
+          ? `no channels kept: the board's reading was identical in all ${log.pdFrozen.records} connected records (every channel 0 A, temperature byte ${log.pdFrozen.temp}), so it is a placeholder, not a reading`
+          : 'no channels were decoded',
+      );
     const v = stats(log.voltage);
     out.push(`battery: lowest ${v.n ? Math.min(...log.voltage.filter((x) => !Number.isNaN(x))).toFixed(2) : '–'} V, highest ${n1(v.peak)} V`);
     out.push(`enabled: ${fmtSpan(analysis.runs.reduce((a, r) => a + r.autoTime + r.teleopTime + r.testTime, 0))} · ${analysis.runs.length} period(s)`);
