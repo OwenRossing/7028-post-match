@@ -2,6 +2,7 @@ import type { Analysis, LogSummary } from './analysis';
 import type { DSEventsFile } from './dsevents';
 import type { DSLog } from './dslog';
 import type { ExtraInfo } from './extras';
+import type { HootProbe } from './hoot';
 import type { ExtraKind } from './library';
 
 export interface ParsedLog {
@@ -18,6 +19,8 @@ export interface ExtraPayload {
   name: string;
   kind: ExtraKind;
   data: ArrayBuffer;
+  /** For a .hoot already described when it was added: the description, with `data` left empty. */
+  hoot?: HootProbe;
 }
 
 export interface WorkerRequest {

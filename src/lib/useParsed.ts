@@ -13,7 +13,12 @@ export function loadParsed(entry: LogEntry): Promise<ParsedLog> {
       const [a, b, x] = await Promise.all([
         entry.dslog?.read(),
         entry.dsevents?.read(),
-        Promise.all((entry.extras ?? []).map(async (e) => ({ name: e.file.name, kind: e.kind, data: await e.file.read() }))),
+        // a .hoot that was described when it was added is not read again
+        Promise.all(
+          (entry.extras ?? []).map(async (e) =>
+            e.kind === 'hoot' && e.hoot ? { name: e.file.name, kind: e.kind, data: new ArrayBuffer(0), hoot: e.hoot } : { name: e.file.name, kind: e.kind, data: await e.file.read() },
+          ),
+        ),
       ]);
       return parseLog(a, b, x);
     })();

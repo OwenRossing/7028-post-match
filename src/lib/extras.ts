@@ -1,6 +1,7 @@
 // Reading the logs attached to a match: what each one is, what it holds and how it lines up with the DS log.
 
 import { alignAnchors, clockSpan, rioAnchors, type Alignment, type DsAnchor, type RioAnchors } from './aggregate';
+import { probeHoot, type HootProbe } from './hoot';
 import type { ExtraKind } from './library';
 import { fileStamp, isWPILog, keepAnchors, parseWPILog, type WPILog, type WPILogKind } from './wpilog';
 
@@ -31,6 +32,12 @@ export interface ExtraInfo {
   startUnix?: number;
   /** What it takes to place this log on a match later. Kept with the log. */
   anchors?: RioAnchors;
+  /** False for a log that was kept but cannot be read yet (a .hoot). */
+  decoded?: boolean;
+  /** For a .hoot: a description of the file, enough to work out its layout. */
+  hoot?: HootProbe;
+  /** Shown on the log's card. */
+  note?: string;
   alignment?: Alignment;
   consoleLines?: number;
   signals?: ExtraSignal[];
@@ -38,6 +45,9 @@ export interface ExtraInfo {
 
 export const HOOT_HELP =
   'A Phoenix .hoot log has to be converted to .wpilog first (CTRE Owlet, or export from Phoenix Tuner X). Then add the .wpilog.';
+
+export const HOOT_NOTE =
+  "This .hoot is saved with the match, but PitView can't read its signals yet: CTRE doesn't publish the format. Press Copy hoot diagnostics and paste the text to work out the layout. Or convert it to .wpilog (CTRE Owlet, or Phoenix Tuner X) and add that.";
 
 /** A best guess at who wrote the log, from the names inside it. */
 export function logRole(w: WPILog): string {
@@ -74,10 +84,28 @@ function describe(name: string, kind: ExtraKind, size: number, w: WPILog, ds: Ds
   return info;
 }
 
-/** Reads one attached log. `ds` is what to line it up against; leave it out to only look inside the file. */
-export function describeExtra(name: string, kind: ExtraKind, bytes: ArrayBuffer, ds: DsAnchor | null): ExtraInfo {
+/**
+ * Reads one attached log. `ds` is what to line it up against; leave it out to only look inside the file. A .hoot is
+ * only described (see hoot.ts); `known` is its description from when it was added, so the file need not be read again.
+ */
+export function describeExtra(name: string, kind: ExtraKind, bytes: ArrayBuffer, ds: DsAnchor | null, known?: HootProbe): ExtraInfo {
+  if (kind === 'hoot') {
+    const probe = known ?? probeHoot(new Uint8Array(bytes), name);
+    return {
+      name,
+      kind,
+      size: probe.size,
+      ok: true,
+      decoded: false,
+      role: 'CTRE Phoenix',
+      note: HOOT_NOTE,
+      hoot: probe,
+      // all there is to place it by is the match CTRE put in the name, if it did
+      anchors: { first: 0, last: 0, enabled: [], lines: [], ids: probe.name.ids },
+      signals: [],
+    };
+  }
   const size = bytes.byteLength;
-  if (kind === 'hoot') return { name, kind, size, ok: false, error: HOOT_HELP };
   const u8 = new Uint8Array(bytes);
   if (!isWPILog(u8)) return { name, kind, size, ok: false, error: 'This is not a WPILib data log: it does not start with "WPILOG".' };
   try {

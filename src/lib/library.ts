@@ -1,5 +1,6 @@
 import type { LogSummary } from './analysis';
 import type { Candidate, RioAnchors } from './aggregate';
+import type { HootProbe } from './hoot';
 import { parseLogName } from './time';
 import { matchKindOf } from './wpilog';
 
@@ -24,6 +25,10 @@ export interface ExtraFile {
   anchors?: RioAnchors;
   /** Where it sits in the day, Unix seconds. */
   startUnix?: number;
+  /** False for a log that is kept but cannot be read yet (a .hoot). */
+  decoded?: boolean;
+  /** For a .hoot: what it looked like when it was added, so the file need not be read again. */
+  hoot?: HootProbe;
 }
 
 /**

@@ -91,7 +91,7 @@ export function RobotOnly({
               Add robot logs
             </button>
           </div>
-          {info && info.length > 0 && (
+          {info && info.some((x) => x.ok && x.decoded !== false) && (
             <CopyDiagnostics
               build={() => robotLogDiagnostics(info)}
               label="Copy robot log diagnostics"

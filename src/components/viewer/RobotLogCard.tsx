@@ -1,6 +1,8 @@
 import type { Confidence } from '../../lib/aggregate';
+import { robotLogDiagnostics } from '../../lib/diagnostics';
 import type { ExtraInfo } from '../../lib/extras';
 import { fmtSpan } from '../../lib/time';
+import { CopyDiagnostics } from './CopyDiagnostics';
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const size = (bytes: number) => (bytes >= 1e6 ? `${(bytes / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1e3))} KB`);
@@ -17,9 +19,11 @@ export function robotSummary(extras: ExtraInfo[]): string {
   if (!extras.length) return 'None added';
   const ok = extras.filter((x) => x.ok);
   if (!ok.length) return `${plural(extras.length, 'log')}, none readable`;
-  const aligned = ok.filter((x) => x.alignment && x.alignment.confidence !== 'none').length;
+  const readable = ok.filter((x) => x.decoded !== false);
+  const unread = ok.length - readable.length;
+  const aligned = readable.filter((x) => x.alignment && x.alignment.confidence !== 'none').length;
   const roles = [...new Set(ok.map((x) => x.role))].join(' + ');
-  return `${roles}${ok.length > 1 ? ` · ${ok.length} logs` : ''}${aligned === ok.length ? '' : ` · ${ok.length - aligned} not lined up`}`;
+  return `${roles}${ok.length > 1 ? ` · ${ok.length} logs` : ''}${unread ? ` · ${unread} not readable yet` : ''}${aligned === readable.length ? '' : ` · ${readable.length - aligned} not lined up`}`;
 }
 
 /** What a robot log is, how it lines up with the match, and every signal in it. `waiting` is for a match with no Driver Station log yet. */
@@ -36,6 +40,17 @@ export function RobotLogCard({ info: x, onRemove, waiting = false }: { info: Ext
       </div>
       {!x.ok ? (
         <p className="robot-log-note bad">{x.error}</p>
+      ) : x.decoded === false ? (
+        <>
+          <p className="robot-log-note">
+            <b>Kept, not readable yet.</b> {x.note}
+          </p>
+          <CopyDiagnostics
+            build={() => robotLogDiagnostics([x])}
+            label="Copy hoot diagnostics"
+            note="A description of this file (first bytes, readable text, how compressed it looks) to paste here. The file itself is not included."
+          />
+        </>
       ) : (
         <>
           {waiting && !a ? (

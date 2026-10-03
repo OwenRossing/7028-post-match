@@ -43,7 +43,7 @@ A match is the Driver Station's `.dslog` + `.dsevents` plus any robot logs (`.wp
 - **Add to a specific match** with the download-arrow menu → **Add robot logs**.
 - **Info → Robot logs** shows each log, how it lined up with the Driver Station log (and how sure that is), and every signal in it. **Remove** takes one off, and it will not be added back by itself.
 - Everything is saved in this browser (unless you turned saving off). There is no limit in PitView; the browser's own storage is the limit, and the Library shows how much is in use.
-- A `.hoot` is not read directly: it is a closed format. Convert it to `.wpilog` with CTRE's Owlet (or Tuner X's export) and add that. A converted CTRE log shows as a `CTRE` chip.
+- **A `.hoot`** is kept with its match like any other robot log (CTRE puts the event and match in the file name during a field match, and PitView uses that to find the match), but its signals are not read yet: CTRE does not publish the format. Its card has **Copy hoot diagnostics**, a short text description of the file (first bytes, readable text, how compressed it looks) that can be pasted to work out the layout without sending the file. Or convert it to `.wpilog` with CTRE's Owlet (`owlet -f wpilog in.hoot out.wpilog`) or Tuner X and add that. A hoot shows as an amber `CTRE hoot` chip until it can be read.
 
 Today the robot logs are lined up, matched and kept with the match. Charting their signals and judging them against earlier matches comes next.
 
@@ -88,6 +88,8 @@ src/lib/wpilog.ts       WPILib DataLog (.wpilog) decoder: roboRIO logs, and CTRE
 src/lib/aggregate.ts    lining a robot log up with the DS timeline; which matches a log belongs to
 src/lib/extras.ts       reading one attached log: role, signals, alignment
 src/lib/robotLogs.ts   which robot logs are on which match; robot-only matches; saved between visits
+src/lib/hoot.ts         CTRE .hoot: describes a file (the layout is not published); where a decoder goes
+src/lib/diagnostics.ts  the text summaries behind Copy diagnostics
 src/lib/analysis.ts     modes, matches, comms drops, code stalls, stats, findings, library summaries
 src/workers/            parsing off the main thread
 src/lib/useLibrary.ts   uploads (saved to IndexedDB), watched DS folder, companion, background indexing

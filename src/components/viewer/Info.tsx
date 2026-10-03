@@ -171,7 +171,7 @@ export function Info({ ctx }: { ctx: ViewCtx }) {
           </div>
         </>
       ),
-      extra: parsed.extras.length ? (
+      extra: parsed.extras.some((x) => x.ok && x.decoded !== false) ? (
         <CopyDiagnostics
           build={() => robotLogDiagnostics(parsed.extras)}
           label="Copy robot log diagnostics"

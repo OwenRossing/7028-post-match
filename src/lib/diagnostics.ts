@@ -4,6 +4,7 @@
 import type { ExtraInfo } from './extras';
 import type { LogEntry } from './library';
 import { fmtSpan } from './time';
+import { hootProbeLines } from './hoot';
 import { matchLabel } from './wpilog';
 import type { ParsedLog } from './workerClient';
 
@@ -34,6 +35,10 @@ export function robotLogDiagnostics(infos: ExtraInfo[], maxSignals = 400): strin
   for (const x of infos) {
     if (!x.ok) {
       out.push(`robot log ${x.name} (${x.size} bytes): unreadable: ${x.error}`);
+      continue;
+    }
+    if (x.decoded === false && x.hoot) {
+      out.push(`robot log ${x.name}: ${x.role} · ${(x.size / 1e6).toFixed(1)} MB`, ...hootProbeLines(x.hoot));
       continue;
     }
     const a = x.anchors;
