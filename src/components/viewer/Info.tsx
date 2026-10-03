@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { diagnosticsText } from '../../lib/diagnostics';
 import { fmtDateTime, fmtSpan } from '../../lib/time';
 import { RobotLogCard, robotSummary } from './RobotLogCard';
 import type { ViewCtx } from './types';
@@ -8,6 +9,8 @@ interface Item {
   title: string;
   summary: string;
   body: ReactNode;
+  /** Shown under the body when the row is open. */
+  extra?: ReactNode;
 }
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -195,6 +198,7 @@ export function Info({ ctx }: { ctx: ViewCtx }) {
           ]}
         />
       ),
+      extra: <CopyDiagnostics build={() => diagnosticsText(entry, parsed)} />,
     },
   ];
 
@@ -256,12 +260,43 @@ export function Info({ ctx }: { ctx: ViewCtx }) {
                   <span className="g-name">{it.title}</span>
                   <span className="info-sum">{it.summary}</span>
                 </div>
-                {on && <div className="info-body">{it.body}</div>}
+                {on && (
+                  <div className="info-body">
+                    {it.body}
+                    {it.extra}
+                  </div>
+                )}
               </div>
             );
           })}
         </section>
       </div>
+    </div>
+  );
+}
+
+/** Puts a short text summary of how this log was read on the clipboard, to paste into a bug report instead of sending the file. */
+function CopyDiagnostics({ build }: { build: () => string }) {
+  const [state, setState] = useState<'idle' | 'copied' | 'show'>('idle');
+  const [text, setText] = useState('');
+  const copy = async () => {
+    const t = build();
+    setText(t);
+    try {
+      await navigator.clipboard.writeText(t);
+      setState('copied');
+      setTimeout(() => setState('idle'), 5000);
+    } catch {
+      setState('show'); // the browser refused: show it to copy by hand
+    }
+  };
+  return (
+    <div className="info-actions">
+      <button className="btn small" onClick={copy}>
+        {state === 'copied' ? 'Copied. Paste it in the chat.' : 'Copy diagnostics'}
+      </button>
+      <p className="muted info-empty">A short summary of how this log was read (numbers only, no messages), to paste when something looks wrong.</p>
+      {state === 'show' && <textarea className="diag" readOnly rows={10} value={text} onFocus={(e) => e.currentTarget.select()} />}
     </div>
   );
 }
