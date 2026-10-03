@@ -8,6 +8,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
+const { copyIntoRobotFolder } = require('./robotfiles.cjs');
 
 // Tests (and portable installs) can keep everything in one folder.
 if (process.env.PITVIEW_USER_DATA) app.setPath('userData', process.env.PITVIEW_USER_DATA);
@@ -138,6 +139,14 @@ function registerIpc() {
 
   ipcMain.handle('pitview:retry', (e) => {
     if (trusted(e)) engine.robot.retry();
+  });
+
+  // Robot logs dropped on the page: copied into the robot-log folder, where the engine converts hoots and the page finds them.
+  ipcMain.handle('pitview:addRobot', async (e, paths) => {
+    if (!trusted(e)) return { copied: [], skipped: [], failed: [] };
+    const result = await copyIntoRobotFolder(paths, settings.robotDir);
+    if (result.copied.length) void engine.robot.scan();
+    return result;
   });
 }
 

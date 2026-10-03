@@ -19,6 +19,11 @@ export interface DesktopBridge {
   openFolder(kind: 'ds' | 'robot'): Promise<void>;
   /** Tries again the hoots Owlet could not convert. */
   retryConversions(): Promise<void>;
+  /**
+   * Copies robot logs the user dropped or picked into the robot-log folder, where Owlet converts the hoots and each log
+   * finds its match. `skipped` are ones already there.
+   */
+  addRobotFiles(files: File[]): Promise<{ copied: string[]; skipped: string[]; failed: { name: string; error: string }[] }>;
 }
 
 export function desktopBridge(): DesktopBridge | undefined {

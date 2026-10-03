@@ -8,6 +8,8 @@ on:
   workflow_dispatch:
   push:
     tags: ['desktop-v*']
+    # builds of this branch give a downloadable artifact (no release), so the app can be tried before it is merged
+    branches: ['claude/test-3be4fu']
 
 permissions:
   contents: write
@@ -44,6 +46,7 @@ jobs:
             desktop/release/*.exe
           if-no-files-found: error
       - name: Put the files on a release
+        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}

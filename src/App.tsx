@@ -8,6 +8,7 @@ import { Viewer } from './components/Viewer';
 import type { Tab } from './components/viewer/types';
 import { Welcome } from './components/Welcome';
 import { classifyHistory, usesDemoHistory } from './lib/baseline';
+import { desktopBridge } from './lib/desktop';
 import { filesFromDrop } from './lib/folder';
 import { fileKind, isLogFile, sortEntries, type LogEntry } from './lib/library';
 import { updateSettings, useSettings } from './lib/settings';
@@ -100,7 +101,26 @@ export default function App() {
 
   /** Adds roboRIO / CTRE logs: to `target` when given, otherwise to the matches they fit, or to a new match of their own. */
   const addExtras = useCallback(
-    async (files: File[], target?: string) => {
+    async (all: File[], target?: string) => {
+      // In the desktop app a hoot goes to the robot-log folder, where Owlet converts it and it finds its match by itself.
+      const bridge = desktopBridge();
+      const hoots = bridge ? all.filter((f) => fileKind(f.name) === 'hoot') : [];
+      const files = hoots.length ? all.filter((f) => !hoots.includes(f)) : all;
+      if (bridge && hoots.length) {
+        const r = await bridge
+          .addRobotFiles(hoots)
+          .catch((err) => ({ copied: [], skipped: [], failed: hoots.map((f) => ({ name: f.name, error: String((err as Error).message ?? err) })) }));
+        for (const f of r.failed.slice(0, 2)) toast(f.name, f.error, 'error');
+        const owletFound = (await bridge.settings().catch(() => null))?.owlet.found ?? true;
+        if (r.copied.length)
+          toast(
+            r.copied.length === 1 ? `Copied ${r.copied[0]} to the robot-log folder` : `Copied ${r.copied.length} hoots to the robot-log folder`,
+            `${owletFound ? 'Owlet converts it in the background, and it joins its match by itself.' : "Owlet isn't set up yet: use Locate Owlet in the ⋯ menu and it converts by itself."}${target ? " It is placed by its name and clock, not on the match you picked." : ''}`,
+            'success',
+          );
+        else if (r.skipped.length && !r.failed.length) toast('Already in the robot-log folder', r.skipped.join(', '), 'info');
+      }
+      if (!files.length) return;
       const res = await library.attachExtras(files, target);
       for (const r of res.rejected.slice(0, 2)) toast(r.name, r.reason, 'error');
       const title = (k: string) => library.entries.get(k)?.summary?.title ?? library.entries.get(k)?.robot?.title ?? k;
