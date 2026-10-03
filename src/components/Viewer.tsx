@@ -3,16 +3,18 @@ import { createPortal } from 'react-dom';
 import { computeStats, findProblems, problemStops, stepProblem } from '../lib/analysis';
 import { ChartGroup, type Marker } from '../lib/chartGroup';
 import { download, eventsToCsv, logToCsv, safeFileName, summaryMarkdown } from '../lib/export';
-import type { LogEntry } from '../lib/library';
+import { hasDS, type LogEntry } from '../lib/library';
 import { channelLabelKey, type Settings } from '../lib/settings';
 import type { ChartTheme } from '../lib/theme';
 import { fmtDateTime, fmtSpan } from '../lib/time';
 import { makeTimeFormat } from '../lib/timefmt';
 import type { ParsedState } from '../lib/useParsed';
+import { FileChips } from './FileChips';
 import { Icon } from './Icon';
 import { KeyBar } from './KeyBar';
 import { Scrim } from './Scrim';
 import { Board } from './viewer/Board';
+import { RobotOnly } from './viewer/RobotOnly';
 import { EventsView } from './viewer/EventsView';
 import { CHART_SIGNALS, Graphs } from './viewer/Graphs';
 import { Info } from './viewer/Info';
@@ -51,6 +53,8 @@ function isTyping(e: KeyboardEvent) {
 
 export function Viewer(props: Props) {
   const { entry, state } = props;
+  if (!hasDS(entry))
+    return <RobotOnly entry={entry} headSlot={props.headSlot} onAddLogs={props.onAddLogs} onRemoveLog={props.onRemoveLog} onRemove={() => props.onRemove?.()} />;
   if (state.status === 'error')
     return (
       <div className="center-state">
@@ -304,6 +308,7 @@ function LoadedViewer({
           </span>
         )}
         {refreshing && <div className="spinner" style={{ width: 13, height: 13 }} />}
+        <FileChips entry={entry} compact showMissing onAddRobot={onAddLogs} />
         <span className="vhead-sub">
           {whoWhere}
           <span className="vhead-date">

@@ -71,6 +71,7 @@ export function classifyHistory(
     const s = e.summary;
     const no = (reason: string) => status.set(e.key, { used: false, reason });
     if (e.key === current.key) no('This is the match being viewed');
+    else if (e.robot) no('Robot logs only, no Driver Station log yet');
     else if (!s) no('Still being read');
     else if (!s.isMatch) no('Not a match (the robot was never enabled for a full auto and teleop)');
     else if (!s.metrics) no('Needs reading again');

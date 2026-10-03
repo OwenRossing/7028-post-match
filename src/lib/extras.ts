@@ -1,8 +1,8 @@
 // Reading the logs attached to a match: what each one is, what it holds and how it lines up with the DS log.
 
-import { alignWPILog, clockSpan, type Alignment, type DsAnchor } from './aggregate';
+import { alignAnchors, clockSpan, rioAnchors, type Alignment, type DsAnchor, type RioAnchors } from './aggregate';
 import type { ExtraKind } from './library';
-import { isWPILog, keepAnchors, parseWPILog, type WPILog, type WPILogKind } from './wpilog';
+import { fileStamp, isWPILog, keepAnchors, parseWPILog, type WPILog, type WPILogKind } from './wpilog';
 
 export interface ExtraSignal {
   name: string;
@@ -25,6 +25,10 @@ export interface ExtraInfo {
   /** The log's own wall clock span, Unix seconds, when it has one. */
   clock?: { start: number; end: number };
   truncated?: boolean;
+  /** Unix seconds of the first time the robot was enabled, else the log's start: where this log sits in the day. */
+  startUnix?: number;
+  /** What it takes to place this log on a match later. Kept with the log. */
+  anchors?: RioAnchors;
   alignment?: Alignment;
   consoleLines?: number;
   signals?: ExtraSignal[];
@@ -59,7 +63,12 @@ function describe(name: string, kind: ExtraKind, size: number, w: WPILog, ds: Ds
   };
   const clock = clockSpan(w);
   if (clock) info.clock = clock;
-  if (ds) info.alignment = alignWPILog(w, ds);
+  const anchors = rioAnchors(w, name);
+  info.anchors = anchors;
+  const firstEnabled = anchors.enabled[0];
+  if (anchors.clockOffset != null) info.startUnix = (firstEnabled ? firstEnabled.start : w.first) + anchors.clockOffset;
+  else info.startUnix = fileStamp(name)?.unix;
+  if (ds) info.alignment = alignAnchors(anchors, ds);
   return info;
 }
 

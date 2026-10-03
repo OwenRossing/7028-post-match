@@ -34,15 +34,18 @@ npm run build      # static site in dist/
 
 ## Robot logs
 
-A match is the Driver Station's `.dslog` + `.dsevents`. Other logs are *added to* the match, whenever you have them:
+A match is the Driver Station's `.dslog` + `.dsevents` plus any robot logs (`.wpilog`) that belong to it. Drop as many files as you like, in any order, from any number of days: PitView sorts them into matches, and the Library groups the matches by day.
 
-- **Drop a `.wpilog`** anywhere on the page. PitView reads the robot's clock from it and adds it to every match it covers (a run of robot code often spans several DS logs). If the log has no clock, it goes to the match you have open.
-- **Or open a match** and use the download-arrow menu → **Add robot logs**, which adds it to that match for certain.
-- **Info → Robot logs** shows each log, how it lined up (and how sure that is), and every signal inside it. **Remove** takes one off.
-- Added logs are saved in this browser with the match (unless you turned saving off), so you can add more later and everything is read together.
-- A `.hoot` is not read directly: it is a closed format. Convert it to `.wpilog` with CTRE's Owlet (or Tuner X's export) and add that.
+- **Chips show what a match holds.** `DS`, `Msgs`, `Rio`, `CTRE` in the Library, and next to the title of the open match. A dashed chip is something that is not there yet.
+- **How a robot log finds its match**, best evidence first: the field's own name for the match (event, type and number, from the robot's FMSInfo or the file name), then both machines' wall clocks, then the shape of what happened (shared console messages, enabled periods). A log is only added automatically when that is clear. When one robot run holds several look-alike matches and nothing tells them apart, it is not guessed.
+- **A robot log that fits no match starts a match of its own** ("Robot log only"), in the right day. When the Driver Station log that belongs to it is added, whenever that is, the two join and the robot-only match goes away.
+- **A log that covers several matches** (one run of robot code often spans several DS logs) is added to all of them.
+- **Add to a specific match** with the download-arrow menu → **Add robot logs**.
+- **Info → Robot logs** shows each log, how it lined up with the Driver Station log (and how sure that is), and every signal in it. **Remove** takes one off, and it will not be added back by itself.
+- Everything is saved in this browser (unless you turned saving off). There is no limit in PitView; the browser's own storage is the limit, and the Library shows how much is in use.
+- A `.hoot` is not read directly: it is a closed format. Convert it to `.wpilog` with CTRE's Owlet (or Tuner X's export) and add that. A converted CTRE log shows as a `CTRE` chip.
 
-Today the added logs are lined up, listed and kept with the match. Charting their signals and judging them against earlier matches comes next.
+Today the robot logs are lined up, matched and kept with the match. Charting their signals and judging them against earlier matches comes next.
 
 ## Auto-loading the latest match on the DS laptop
 
@@ -84,6 +87,7 @@ src/lib/dsevents.ts     .dsevents decoder: message splitting, classification, FM
 src/lib/wpilog.ts       WPILib DataLog (.wpilog) decoder: roboRIO logs, and CTRE logs after conversion
 src/lib/aggregate.ts    lining a robot log up with the DS timeline; which matches a log belongs to
 src/lib/extras.ts       reading one attached log: role, signals, alignment
+src/lib/robotLogs.ts   which robot logs are on which match; robot-only matches; saved between visits
 src/lib/analysis.ts     modes, matches, comms drops, code stalls, stats, findings, library summaries
 src/workers/            parsing off the main thread
 src/lib/useLibrary.ts   uploads (saved to IndexedDB), watched DS folder, companion, background indexing

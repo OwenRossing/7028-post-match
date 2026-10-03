@@ -79,7 +79,7 @@ export function Welcome({ library, recent, onOpenFiles, onOpen, onSample, onLate
               <li key={e.key}>
                 <button onClick={() => onOpen(e.key)}>
                   <span className={`dot ${e.summary?.verdict ?? 'none'}`} />
-                  <span className="pl-title">{e.summary?.title ?? e.key}</span>
+                  <span className="pl-title">{e.robot ? `${e.robot.title} (robot log only)` : (e.summary?.title ?? e.key)}</span>
                   <span className="pl-sub">{fmtDateTime(e.startTime)}</span>
                   <Icon name="chevronRight" size={16} />
                 </button>

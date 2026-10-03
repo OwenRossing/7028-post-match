@@ -1,5 +1,7 @@
 import type { LogSummary } from './analysis';
+import type { Candidate, RioAnchors } from './aggregate';
 import { parseLogName } from './time';
+import { matchKindOf } from './wpilog';
 
 export type SourceKind = 'folder' | 'companion' | 'saved' | 'upload' | 'sample';
 
@@ -16,6 +18,12 @@ export type ExtraKind = 'wpilog' | 'hoot';
 export interface ExtraFile {
   kind: ExtraKind;
   file: FileRef;
+  /** Who wrote it ("roboRIO", "CTRE Phoenix"), for labels. */
+  role?: string;
+  /** What it takes to place this log on a match; kept so it can be placed later, when the match's DS log turns up. */
+  anchors?: RioAnchors;
+  /** Where it sits in the day, Unix seconds. */
+  startUnix?: number;
 }
 
 /**
@@ -29,6 +37,11 @@ export interface LogEntry {
   dsevents?: FileRef;
   /** Attached logs, oldest first. Kept apart from the DS files: they survive the DS folder being rescanned. */
   extras?: ExtraFile[];
+  /**
+   * A match that so far has only robot logs: it was started by a log that fits no Driver Station log yet, and takes the
+   * DS log when one that belongs to it turns up. Its key is `robot:<first log name>`.
+   */
+  robot?: { title: string };
   /** Unix seconds, from the file name (local time) or the file's modified time. */
   startTime: number;
   summary?: LogSummary;
@@ -118,6 +131,41 @@ export function mergeEntries(current: Map<string, LogEntry>, incoming: LogEntry[
     }
   }
   return next;
+}
+
+/** Whether the match has Driver Station files to read (a robot-only match does not). */
+export function hasDS(e: LogEntry): boolean {
+  return !!(e.dslog || e.dsevents);
+}
+
+/** A match as a robot log can be placed on it, from its library summary. Only matches with a DS log and a summary. */
+export function candidateOf(e: LogEntry): Candidate | undefined {
+  const s = e.summary;
+  if (!hasDS(e) || !s?.anchor) return undefined;
+  const type = s.fms && s.matchType ? matchKindOf(s.matchType) : undefined;
+  return {
+    key: e.key,
+    id: type && s.matchNumber ? { event: s.eventName, type, number: s.matchNumber } : undefined,
+    anchor: s.anchor,
+  };
+}
+
+/** A robot-only match as another robot log can be placed on it: by the field's name for it, else by the clock. */
+export function robotCandidateOf(e: LogEntry): Candidate | undefined {
+  const logs = (e.extras ?? []).filter((x) => x.anchors);
+  if (!e.robot || !logs.length) return undefined;
+  const a = logs[0].anchors!;
+  const off = a.clockOffset;
+  return {
+    key: e.key,
+    id: logs.flatMap((x) => x.anchors!.ids)[0],
+    anchor: {
+      startUnix: off != null ? a.first + off : undefined,
+      duration: a.last - a.first,
+      enabled: [],
+      messages: [],
+    },
+  };
 }
 
 export function sortEntries(entries: Iterable<LogEntry>): LogEntry[] {

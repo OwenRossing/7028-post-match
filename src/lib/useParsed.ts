@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { versionKey, type LogEntry } from './library';
+import { hasDS, versionKey, type LogEntry } from './library';
 import { parseLog, type ParsedLog } from './workerClient';
 
 const cache = new Map<string, Promise<ParsedLog>>();
@@ -39,6 +39,8 @@ export interface ParsedState {
 }
 
 export function useParsed(entry: LogEntry | undefined): ParsedState {
+  // a match that has only robot logs has nothing for the DS parser to read
+  if (entry && !hasDS(entry)) entry = undefined;
   const [state, setState] = useState<ParsedState>({ status: 'idle' });
   const vkey = entry ? versionKey(entry) : '';
 

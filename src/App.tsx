@@ -85,45 +85,43 @@ export default function App() {
     },
     [settings.autoFollow, openKey, toast],
   );
-  const library = useLibrary({ onNewLog, onError: (title, msg) => toast(title, msg, 'error') });
+  const library = useLibrary({ onNewLog, onError: (title, msg) => toast(title, msg, 'error'), onInfo: (title, msg) => toast(title, msg, 'success') });
   const entries = useMemo(() => sortEntries(library.entries.values()), [library.entries]);
   const selected = selectedKey ? library.entries.get(selectedKey) : undefined;
   const parsed = useParsed(view === 'main' ? selected : undefined);
 
   // Which logs the open match is compared against. The Board uses the same function, so this is the real list.
   const baseline = useMemo(() => {
-    if (!selected || view !== 'main') return null;
+    if (!selected || view !== 'main' || selected.robot) return null; // a robot-only match has no Board to compare
     const team = selected.summary?.team ?? (parsed.key === selected.key ? parsed.data?.events?.meta.team : undefined);
     const { points, status } = classifyHistory(entries, { key: selected.key, startTime: selected.startTime, team });
     return { title: selected.summary?.title ?? selected.key, demo: usesDemoHistory(selected, points.length), status };
   }, [entries, selected, view, parsed.key, parsed.data]);
 
-  /** Adds roboRIO / CTRE logs: to `target` when given, otherwise to the matches their own clock says they cover. */
+  /** Adds roboRIO / CTRE logs: to `target` when given, otherwise to the matches they fit, or to a new match of their own. */
   const addExtras = useCallback(
     async (files: File[], target?: string) => {
-      let res = await library.attachExtras(files, target);
-      // Nothing to go by in the log itself: if a match is open, that is the likeliest home.
-      if (!target && res.unplaced.length && selectedKey) {
-        const names = new Set(res.unplaced);
-        const second = await library.attachExtras(files.filter((f) => names.has(f.name)), selectedKey);
-        res = { ...res, attached: [...res.attached, ...second.attached], unplaced: [], rejected: [...res.rejected, ...second.rejected] };
-        if (second.attached.length) toast("Couldn't tell which match it belongs to", `Added ${[...names].join(', ')} to the open match. Check Info to see if it lines up.`);
-      }
+      const res = await library.attachExtras(files, target);
       for (const r of res.rejected.slice(0, 2)) toast(r.name, r.reason, 'error');
-      if (res.unplaced.length)
-        toast(
-          "Couldn't tell which match this log belongs to",
-          `${res.unplaced.join(', ')} has no clock to go by. Open the match, then use Add logs in the download menu at the top.`,
-        );
+      const title = (k: string) => library.entries.get(k)?.summary?.title ?? library.entries.get(k)?.robot?.title ?? k;
+      const created = res.attached.filter((a) => a.created);
+      const joined = res.attached.filter((a) => !a.created);
       const keys = [...new Set(res.attached.flatMap((a) => a.keys))];
-      if (!keys.length) return;
-      const title = (k: string) => library.entries.get(k)?.summary?.title ?? k;
-      toast(
-        keys.length === 1 ? `Added to ${title(keys[0])}` : `Added to ${keys.length} matches`,
-        keys.length === 1 ? res.attached.map((a) => a.name).join(', ') : 'The log covers all of them.',
-        'success',
-      );
-      if (!selectedKey || !keys.includes(selectedKey)) openKey(keys[0], 'info');
+      if (joined.length) {
+        const where = [...new Set(joined.flatMap((a) => a.keys))];
+        toast(
+          where.length === 1 ? `Added to ${title(where[0])}` : `Added to ${where.length} matches`,
+          where.length === 1 ? joined.map((a) => a.name).join(', ') : 'The log covers all of them.',
+          'success',
+        );
+      }
+      if (created.length)
+        toast(
+          created.length === 1 ? 'Started a new match for this robot log' : `Started ${created.length} new matches for these robot logs`,
+          'It fits no Driver Station log yet. Add the .dslog and .dsevents any time and they will join it if they belong together.',
+          'success',
+        );
+      if (keys.length && (!selectedKey || !keys.includes(selectedKey))) openKey(keys[0], 'info');
     },
     [library, selectedKey, openKey, toast],
   );

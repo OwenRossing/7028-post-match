@@ -11,20 +11,21 @@ import {
   scanFolder,
 } from './folder';
 import { idb } from './idb';
-import { matchesForSpan, type Candidate } from './aggregate';
+import { planPlacements, robotMatchTitle } from './aggregate';
 import { HOOT_HELP } from './extras';
 import {
+  candidateOf,
   fileKind,
   fileRefFromFile,
+  hasDS,
   mergeEntries,
   pairFiles,
   summaryKeyOf,
-  type ExtraFile,
-  type ExtraKind,
   type FileRef,
   type LogEntry,
   type SourceKind,
 } from './library';
+import { robotKey, RobotLogStore } from './robotLogs';
 import { getSettings } from './settings';
 import { probeExtras, summarizeLog } from './workerClient';
 
@@ -47,26 +48,19 @@ interface SavedMeta {
   mtime: number;
 }
 
-/** A log attached to a match, as remembered between visits. The bytes sit in the `files` store under `name`. */
-interface SavedExtra extends SavedMeta {
-  kind: ExtraKind;
-}
-
 /** What happened to files offered to `attachExtras`. */
 export interface AttachResult {
-  /** Logs that were added, with the matches they went to. */
-  attached: { name: string; keys: string[] }[];
+  /** Logs that were added, with the matches they went to. `created` is a new match started for a log that fit none. */
+  attached: { name: string; keys: string[]; created: boolean }[];
   /** Logs that cannot be used, and why. */
   rejected: { name: string; reason: string }[];
-  /** Readable logs that could not be matched to any match (no clock to go by). */
-  unplaced: string[];
 }
 
 const POLL_MS = 2000;
 const LIVE_SUMMARY_MIN_MS = 10000;
 const SAMPLE_NAME = '2026_05_16 11_38_21 Sat';
 /** Bump when LogSummary gains fields, so cached summaries are recomputed. */
-const SUMMARY_VERSION = 3;
+const SUMMARY_VERSION = 4;
 
 function savedRef(meta: SavedMeta): FileRef {
   return {
@@ -79,10 +73,6 @@ function savedRef(meta: SavedMeta): FileRef {
   };
 }
 
-function extraRef(meta: SavedMeta): FileRef {
-  return savedRef(meta);
-}
-
 function signature(files: FileRef[]): string {
   return files
     .map((f) => `${f.name}:${f.size}:${f.mtime}`)
@@ -90,7 +80,11 @@ function signature(files: FileRef[]): string {
     .join('|');
 }
 
-export function useLibrary(opts: { onNewLog: (e: LogEntry) => void; onError: (title: string, msg: string) => void }) {
+export function useLibrary(opts: {
+  onNewLog: (e: LogEntry) => void;
+  onError: (title: string, msg: string) => void;
+  onInfo?: (title: string, msg: string) => void;
+}) {
   const [entries, setEntriesState] = useState<Map<string, LogEntry>>(new Map());
   const entriesRef = useRef(entries);
   const [folder, setFolder] = useState<FolderState>({ status: folderSupported() ? 'none' : 'unsupported' });
@@ -105,21 +99,17 @@ export function useLibrary(opts: { onNewLog: (e: LogEntry) => void; onError: (ti
   const companionSig = useRef('');
   const stopCompanion = useRef<(() => void) | null>(null);
 
-  // Logs attached to matches, by match key. Kept apart from the entries so they survive a folder rescan.
-  const attachments = useRef(new Map<string, ExtraFile[]>());
+  // Robot logs and the matches made only of them. Kept apart from the entries so they survive a folder rescan.
+  const store = useRef(new RobotLogStore()).current;
 
-  const setEntries = useCallback((fn: (m: Map<string, LogEntry>) => Map<string, LogEntry>) => {
-    let next = fn(entriesRef.current);
-    let copied = false;
-    for (const [key, e] of next) {
-      const x = attachments.current.get(key);
-      if (e.extras === x) continue;
-      if (!copied) (next = new Map(next), (copied = true));
-      next.set(key, { ...e, extras: x });
-    }
-    entriesRef.current = next;
-    setEntriesState(next);
-  }, []);
+  const setEntries = useCallback(
+    (fn: (m: Map<string, LogEntry>) => Map<string, LogEntry>) => {
+      const next = store.applyTo(fn(entriesRef.current));
+      entriesRef.current = next;
+      setEntriesState(next);
+    },
+    [store],
+  );
 
   /** Replaces every entry of one source with a fresh listing, reporting brand new logs. */
   const syncSource = useCallback(
@@ -166,30 +156,16 @@ export function useLibrary(opts: { onNewLog: (e: LogEntry) => void; onError: (ti
     [setEntries],
   );
 
-  /** Writes what is attached to which match, and deletes stored files nothing refers to any more. */
-  const saveAttachments = useCallback(async (dropped: string[] = []) => {
-    try {
-      const out: Record<string, SavedExtra[]> = {};
-      const inUse = new Set<string>();
-      for (const [key, list] of attachments.current) {
-        if (entriesRef.current.get(key)?.source === 'sample') continue; // the sample is not saved, so nothing attached to it is either
-        out[key] = list.map((x) => ({ kind: x.kind, name: x.file.name, size: x.file.size, mtime: x.file.mtime }));
-        list.forEach((x) => inUse.add(x.file.name));
-      }
-      await idb.set('kv', 'attachments', out);
-      for (const name of dropped) if (!inUse.has(name)) await idb.del('files', name);
-    } catch {
-      /* browser storage unavailable: attachments stay for this visit only */
-    }
-  }, []);
+  const skipSaving = (key: string) => entriesRef.current.get(key)?.source === 'sample'; // the sample is not saved, so nothing attached to it is either
 
   /**
-   * Adds roboRIO / CTRE logs to matches. With a `target` they all go to that match. Without one, each log goes to
-   * every match its own clock says it covers (a run of robot code can span several DS logs).
+   * Adds roboRIO / CTRE logs. With a `target` they all go to that match. Without one, each log goes to the matches it
+   * fits (the field's own name for the match, the two clocks, or what happened); a log that fits none starts a new
+   * match of its own, which takes the Driver Station log when that turns up.
    */
   const attachExtras = useCallback(
     async (files: File[], target?: string): Promise<AttachResult> => {
-      const result: AttachResult = { attached: [], rejected: [], unplaced: [] };
+      const result: AttachResult = { attached: [], rejected: [] };
       const wanted: File[] = [];
       for (const f of files) {
         const kind = fileKind(f.name);
@@ -198,77 +174,98 @@ export function useLibrary(opts: { onNewLog: (e: LogEntry) => void; onError: (ti
       }
       if (!wanted.length) return result;
 
-      // Look inside each log first: refuses unreadable ones and finds the matches a clock puts it in.
+      // Look inside each log first: refuses unreadable ones and gets what is needed to place them.
       const payloads = await Promise.all(wanted.map(async (f) => ({ name: f.name, kind: 'wpilog' as const, data: await f.arrayBuffer() })));
       const probed = await probeExtras(payloads.map((p) => ({ ...p, data: p.data.slice(0) })));
       if (!target) {
         // a match dropped together with its robot log is still being read, and its length is needed to place the log
         const deadline = Date.now() + 8000;
-        const reading = () => [...entriesRef.current.values()].some((e) => (e.dslog || e.dsevents) && e.summaryKey !== summaryKeyOf(e) && !e.summaryError);
+        const reading = () => [...entriesRef.current.values()].some((e) => hasDS(e) && e.summaryKey !== summaryKeyOf(e) && !e.summaryError);
         while (reading() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 150));
       }
-      const candidates: Candidate[] = [...entriesRef.current.values()]
-        .filter((e) => e.summary && e.summary.startTime > 0)
-        .map((e) => ({ key: e.key, startUnix: e.summary!.startTime, duration: e.summary!.duration }));
 
       const saved = getSettings().persistUploads;
       for (const [i, f] of wanted.entries()) {
         const info = probed[i];
-        if (!info?.ok) {
+        if (!info?.ok || !info.anchors) {
           result.rejected.push({ name: f.name, reason: info?.error ?? 'Could not read this file.' });
           continue;
         }
-        const keys = target ? [target] : matchesForSpan(info.clock, candidates);
-        if (!keys.length) {
-          result.unplaced.push(f.name);
-          continue;
-        }
-        let ref = fileRefFromFile(f);
+        let file: FileRef = fileRefFromFile(f);
         if (saved) {
           try {
-            await idb.set('files', f.name, payloads[i].data);
-            ref = extraRef({ name: f.name, size: f.size, mtime: f.lastModified });
+            file = await store.keep(f.name, f.size, f.lastModified, payloads[i].data);
           } catch {
             optsRef.current.onError('Could not save the log offline', 'Browser storage is full or unavailable. It is attached for this visit only.');
           }
         }
-        for (const key of keys) {
-          // adding a log with the same name again replaces the earlier copy
-          const list = (attachments.current.get(key) ?? []).filter((x) => x.file.name !== f.name);
-          attachments.current.set(key, [...list, { kind: 'wpilog', file: ref }]);
+        const extra = { kind: 'wpilog' as const, file, role: info.role, anchors: info.anchors, startUnix: info.startUnix };
+
+        let keys: string[];
+        let created = false;
+        if (target) keys = [target];
+        else {
+          const entries = [...entriesRef.current.values()];
+          const cands = [...entries.map(candidateOf), ...store.robotCandidates(entries)].filter((c) => !!c) as NonNullable<ReturnType<typeof candidateOf>>[];
+          keys = planPlacements([{ name: f.name, anchors: info.anchors }], cands, () => false, () => false).map((m) => m.key);
+          if (!keys.length) {
+            // fits nothing: it is a match of its own until a Driver Station log for it arrives
+            const key = robotKey(f.name);
+            store.addRobotMatch(key, { startTime: info.startUnix ?? f.lastModified / 1000, title: robotMatchTitle(info.anchors.ids, f.name) });
+            keys = [key];
+            created = true;
+          }
         }
-        result.attached.push({ name: f.name, keys });
+        for (const key of keys) store.add(key, extra);
+        result.attached.push({ name: f.name, keys, created });
       }
       setEntries((cur) => new Map(cur));
-      if (saved) await saveAttachments();
+      if (saved) await store.save(skipSaving);
       return result;
     },
-    [setEntries, saveAttachments],
+    [setEntries, store],
   );
 
   /** Takes one attached log off a match. */
   const detachExtra = useCallback(
     async (key: string, name: string) => {
-      const rest = (attachments.current.get(key) ?? []).filter((x) => x.file.name !== name);
-      if (rest.length) attachments.current.set(key, rest);
-      else attachments.current.delete(key);
+      store.remove(key, name);
       setEntries((cur) => new Map(cur));
-      await saveAttachments([name]);
+      await store.save(skipSaving, [name]);
     },
-    [setEntries, saveAttachments],
+    [setEntries, store],
   );
+
+  // When matches appear (their DS logs have been read), robot logs that belong to them are added, and robot matches that
+  // can now join their DS log do so.
+  const joinSig = useRef('');
+  useEffect(() => {
+    const sig = [...entries.values()].map((e) => (candidateOf(e) ? e.key : '')).join('|') + `#${store.known().length}`;
+    if (sig === joinSig.current) return;
+    joinSig.current = sig;
+    const plan = store.joinPlan(entries.values());
+    if (!plan.adds.length && !plan.absorbed.length) return;
+    const title = (k: string) => entriesRef.current.get(k)?.summary?.title ?? k;
+    const gained = store.applyJoin(plan);
+    setEntries((cur) => new Map(cur));
+    void store.save(skipSaving);
+    if (gained.length)
+      optsRef.current.onInfo?.(
+        gained.length === 1 ? `Robot logs joined ${title(gained[0])}` : `Robot logs joined ${gained.length} matches`,
+        [...new Set(plan.adds.map((a) => a.name))].join(', '),
+      );
+  }, [entries, store, setEntries]);
 
   const removeEntry = useCallback(
     async (key: string) => {
       const e = entriesRef.current.get(key);
-      const dropped = (attachments.current.get(key) ?? []).map((x) => x.file.name);
-      attachments.current.delete(key);
+      const dropped = store.dropMatch(key);
       setEntries((cur) => {
         const next = new Map(cur);
         next.delete(key);
         return next;
       });
-      if (dropped.length) await saveAttachments(dropped);
+      if (dropped.length) await store.save(skipSaving, dropped);
       if (e && (e.source === 'saved' || e.source === 'upload')) {
         const names = [e.dslog?.name, e.dsevents?.name].filter(Boolean) as string[];
         const index = ((await idb.get<SavedMeta[]>('kv', 'savedIndex')) ?? []).filter((m) => !names.includes(m.name));
@@ -282,8 +279,7 @@ export function useLibrary(opts: { onNewLog: (e: LogEntry) => void; onError: (ti
   const clearSaved = useCallback(async () => {
     await idb.clear('files');
     await idb.set('kv', 'savedIndex', []);
-    await idb.set('kv', 'attachments', {});
-    attachments.current.clear();
+    await store.clear();
     await idb.clear('summaries');
     setEntries((cur) => new Map([...cur].filter(([, e]) => e.source !== 'saved' && e.source !== 'upload')));
   }, [setEntries]);
@@ -436,11 +432,8 @@ export function useLibrary(opts: { onNewLog: (e: LogEntry) => void; onError: (ti
     let cancelled = false;
     (async () => {
       const index = (await idb.get<SavedMeta[]>('kv', 'savedIndex')) ?? [];
-      const remembered = (await idb.get<Record<string, SavedExtra[]>>('kv', 'attachments')) ?? {};
-      for (const [key, list] of Object.entries(remembered))
-        attachments.current.set(key, list.map((m) => ({ kind: m.kind, file: extraRef(m) })));
-      if (!cancelled && (index.length || attachments.current.size))
-        setEntries((cur) => mergeEntries(cur, pairFiles(index.map(savedRef), 'saved')));
+      await store.load();
+      if (!cancelled) setEntries((cur) => mergeEntries(cur, pairFiles(index.map(savedRef), 'saved')));
       if (folderSupported()) {
         const saved = await savedFolder();
         if (!cancelled && saved) {
@@ -467,7 +460,7 @@ export function useLibrary(opts: { onNewLog: (e: LogEntry) => void; onError: (ti
   const queueTimer = useRef(0);
 
   useEffect(() => {
-    const pending = [...entries.values()].filter((e) => e.summaryKey !== summaryKeyOf(e) && !e.summaryError);
+    const pending = [...entries.values()].filter((e) => hasDS(e) && e.summaryKey !== summaryKeyOf(e) && !e.summaryError);
     setIndexing(pending.length);
     if (!pending.length || inFlight.current.size) return;
     pending.sort((a, b) => b.startTime - a.startTime);

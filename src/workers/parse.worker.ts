@@ -3,7 +3,7 @@ import { analyze, computeStats, summarize } from '../lib/analysis';
 import { boardMetrics, buildBoard } from '../lib/board';
 import { parseDSEvents, type DSEventsFile } from '../lib/dsevents';
 import { dslogTransferables, parseDSLog, type DSLog } from '../lib/dslog';
-import { dsAnchor } from '../lib/aggregate';
+import { compactAnchor, dsAnchor } from '../lib/aggregate';
 import { describeExtra } from '../lib/extras';
 import type { WorkerRequest, WorkerResponse } from '../lib/workerClient';
 
@@ -44,6 +44,7 @@ ctx.onmessage = (e: MessageEvent<WorkerRequest>) => {
       const stats = computeStats(log, events, analysis, analysis.focus);
       const summary = summarize(log, events, analysis, stats);
       summary.metrics = boardMetrics(buildBoard(log, events, analysis, stats));
+      summary.anchor = compactAnchor(dsAnchor(log, events, analysis));
       const res: WorkerResponse = { id, ok: true, summary };
       ctx.postMessage(res);
     } else {

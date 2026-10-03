@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { alignWPILog, clockSpan, matchesFor, type DsAnchor } from '../src/lib/aggregate';
+import { alignWPILog, clockSpan, planPlacements, placeLog, rioAnchors, robotMatchTitle, type Candidate, type DsAnchor } from '../src/lib/aggregate';
 import { fileKind, mergeEntries, summaryKeyOf, versionKey, type LogEntry } from '../src/lib/library';
 import { parseWPILog } from '../src/lib/wpilog';
 import { WPILogWriter } from './helpers/wpilog-writer';
@@ -130,28 +130,95 @@ describe('alignWPILog', () => {
   });
 });
 
-describe('matchesFor', () => {
-  const w = rio({ clock: true });
-  const span = clockSpan(w)!;
+describe('which match does a robot log belong to', () => {
+  const cand = (key: string, startOffset: number, duration = 160, id?: Candidate['id']): Candidate => ({
+    key,
+    id,
+    anchor: { ...ds, startUnix: DS_START + startOffset, duration },
+  });
 
   it('uses the robot clock span', () => {
-    expect(span.start).toBeCloseTo(DS_START + 0.7 - SHIFT, 3); // log time 0 is 250.4 s before DS time 0, 0.7 s fast
+    expect(clockSpan(rio({ clock: true }))!.start).toBeCloseTo(DS_START + 0.7 - SHIFT, 3); // log time 0 is 250.4 s before DS time 0, 0.7 s fast
   });
 
-  it('returns every match the run covered', () => {
-    const cands = [
-      { key: 'a', startUnix: DS_START, duration: 160 },
-      { key: 'b', startUnix: DS_START + 10, duration: 150 },
-      { key: 'elsewhere', startUnix: DS_START + 86400, duration: 160 },
-      { key: 'partly', startUnix: DS_START + 170, duration: 100 }, // only 30 s of it inside the run
-    ];
-    expect(matchesFor(w, cands).sort()).toEqual(['a', 'b']);
+  it('trusts overlapping wall clocks, and rejects ones that do not overlap', () => {
+    const a = rioAnchors(rio({ clock: true }));
+    expect(placeLog(a, cand('a', 0)).fit).toBe('high');
+    expect(placeLog(a, cand('b', 10, 150)).fit).toBe('high');
+    expect(placeLog(a, cand('elsewhere', 86400)).fit).toBe('none');
+    expect(placeLog(a, cand('partly', 170, 100)).fit).toBe('low'); // only 30 s of it inside the run
   });
 
-  it('cannot place a log with no clock', () => {
-    expect(matchesFor(rio({ clock: false }), [{ key: 'a', startUnix: DS_START, duration: 160 }])).toEqual([]);
+  it('a match the field named the same is the same match, whatever the clocks say', () => {
+    const a = rioAnchors(rio({ clock: true, extra: (w) => fms(w, 'MNST', 2, 22) }));
+    expect(a.ids).toEqual([{ event: 'MNST', type: 'qualification', number: 22 }]);
+    expect(placeLog(a, cand('q22', 99999, 160, { event: 'MNST', type: 'qualification', number: 22 })).fit).toBe('high');
+    // a different match is out even though the clocks overlap
+    expect(placeLog(a, cand('q23', 0, 160, { event: 'MNST', type: 'qualification', number: 23 })).fit).toBe('none');
+    expect(placeLog(a, cand('p22', 0, 160, { event: 'MNST', type: 'practice', number: 22 })).fit).toBe('none');
+    expect(placeLog(a, cand('other event', 0, 160, { event: 'WISU', type: 'qualification', number: 22 })).fit).toBe('none');
+  });
+
+  it('falls back to the pattern of what happened when there is no clock or name', () => {
+    const a = rioAnchors(rio({ clock: false }));
+    expect(placeLog(a, cand('x', 0)).fit).toBe('high'); // messages and enabled periods agree, nothing else fits
+  });
+
+  it('does not guess when the same pattern fits more than one place', () => {
+    // one robot run with two matches that look alike: enabled 15-30 and 35-170, then again 600 s later
+    const w = new WPILogWriter();
+    const e = w.start('DS:enabled', 'boolean', 0);
+    for (const base of [300, 900]) {
+      w.boolean(e, base + 15, true);
+      w.boolean(e, base + 30, false);
+      w.boolean(e, base + 35, true);
+      w.boolean(e, base + 170, false);
+    }
+    const end = w.start('end', 'double');
+    w.double(end, 1200, 0);
+    const a = rioAnchors(parseWPILog(w.bytes()));
+    const p = placeLog(a, { key: 'q', anchor: { ...ds, startUnix: undefined, messages: [] } });
+    expect(p.fit).not.toBe('high');
+    expect(p.why).toMatch(/more than one place/);
+  });
+
+  it('reads the match from the file name when the log has no field info', () => {
+    const w = rio({ messages: false, enabled: false });
+    expect(rioAnchors(w, 'FRC_20260516_163821_MNST_q22.wpilog').ids).toEqual([{ event: 'MNST', type: 'qualification', number: 22 }]);
+    expect(rioAnchors(w, 'FRC_20260516_163821_MNST_P3.wpilog').ids[0]).toMatchObject({ type: 'practice', number: 3 });
+    expect(rioAnchors(w, 'FRC_20260516_163821.wpilog').ids).toEqual([]);
+    expect(rioAnchors(w, 'whatever.wpilog').ids).toEqual([]);
+  });
+
+  it('names a match that only has robot logs', () => {
+    expect(robotMatchTitle([{ type: 'qualification', number: 22 }])).toBe('Qualification 22');
+    expect(robotMatchTitle([{ type: 'elimination', number: 4 }])).toBe('Playoff 4');
+    expect(robotMatchTitle([])).toBe('Robot log');
+    expect(robotMatchTitle([], 'FRC_20260516_163821.wpilog')).toBe('Robot log FRC_20260516_163821');
+    expect(robotMatchTitle([{ type: 'practice', number: 2 }], 'FRC_x.wpilog')).toBe('Practice 2');
+  });
+
+  it('plans only what is new and wanted', () => {
+    const a = rioAnchors(rio({ clock: true }));
+    const logs = [{ name: 'r.wpilog', anchors: a }];
+    const cands = [cand('a', 0), cand('b', 10, 150), cand('far', 86400)];
+    const none = () => false;
+    expect(planPlacements(logs, cands, none, none).map((m) => m.key)).toEqual(['a', 'b']);
+    // already there, or taken off by the user: left alone
+    expect(planPlacements(logs, cands, (_n, k) => k === 'a', none).map((m) => m.key)).toEqual(['b']);
+    expect(planPlacements(logs, cands, none, (_n, k) => k === 'b').map((m) => m.key)).toEqual(['a']);
   });
 });
+
+/** Field match info the way DataLogManager logs it. */
+function fms(w: WPILogWriter, event: string, type: number, number: number) {
+  const ev = w.start('NT:/FMSInfo/EventName', 'string', 0);
+  const mn = w.start('NT:/FMSInfo/MatchNumber', 'int64', 0);
+  const mt = w.start('NT:/FMSInfo/MatchType', 'int64', 0);
+  w.string(ev, 1, event);
+  w.int64(mt, 1, type);
+  w.int64(mn, 1, number);
+}
 
 describe('entries with attached logs', () => {
   const ref = (name: string, size = 10, mtime = 1) => ({ name, size, mtime, read: async () => new ArrayBuffer(0) });

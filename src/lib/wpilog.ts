@@ -238,7 +238,11 @@ export function parseWPILog(bytes: Uint8Array, opts: WPILogOptions = {}): WPILog
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
 
 const ENABLED_NAMES = ['DS:enabled', 'DriverStation/Enabled', 'NT:/AdvantageKit/DriverStation/Enabled', 'AdvantageKit/DriverStation/Enabled'];
-const ANCHORS = new Set([...ENABLED_NAMES, 'systemTime', 'messages'].map(norm));
+// The Driver Station publishes the field's match info under /FMSInfo; DataLogManager logs it as "NT:/FMSInfo/...".
+const FMS_EVENT = ['NT:/FMSInfo/EventName', 'FMSInfo/EventName', 'NT:/AdvantageKit/DriverStation/EventName'];
+const FMS_NUMBER = ['NT:/FMSInfo/MatchNumber', 'FMSInfo/MatchNumber', 'NT:/AdvantageKit/DriverStation/MatchNumber'];
+const FMS_TYPE = ['NT:/FMSInfo/MatchType', 'FMSInfo/MatchType', 'NT:/AdvantageKit/DriverStation/MatchType'];
+const ANCHORS = new Set([...ENABLED_NAMES, ...FMS_EVENT, ...FMS_NUMBER, ...FMS_TYPE, 'systemTime', 'messages'].map(norm));
 
 /** Entries that lining a log up needs. Passed to `parseWPILog` as `keep` to avoid holding every signal in memory. */
 export const keepAnchors = (name: string) => ANCHORS.has(norm(name));
@@ -287,4 +291,72 @@ export function clockOffset(log: WPILog): number | undefined {
     if (unix > 1.4e9) return unix - s.t[i];
   }
   return undefined;
+}
+
+// ---------- Which match is this? ----------
+
+export type MatchKind = 'practice' | 'qualification' | 'elimination';
+
+/** A match as the field names it. The same identity on two logs means they are of the same match. */
+export interface MatchId {
+  /** FMS event code, when known ("MNST"). */
+  event?: string;
+  type: MatchKind;
+  number: number;
+}
+
+export const MATCH_LABEL: Record<MatchKind, string> = { practice: 'Practice', qualification: 'Qualification', elimination: 'Playoff' };
+
+export function matchLabel(id: MatchId): string {
+  return `${MATCH_LABEL[id.type]} ${id.number}`;
+}
+
+export function sameMatch(a: MatchId, b: MatchId): boolean {
+  return a.type === b.type && a.number === b.number && (!a.event || !b.event || a.event.toLowerCase() === b.event.toLowerCase());
+}
+
+/** "Qualification", "practice", "Elimination" … to a kind. */
+export function matchKindOf(name: string): MatchKind | undefined {
+  const n = name.trim().toLowerCase();
+  if (n.startsWith('pract')) return 'practice';
+  if (n.startsWith('qual') || n === 'q') return 'qualification';
+  if (n.startsWith('elim') || n.startsWith('play') || n === 'e') return 'elimination';
+  if (n === 'p') return 'practice';
+  return undefined;
+}
+
+/**
+ * The matches the field said this log was running: from the FMSInfo entries (MatchType 1 = practice,
+ * 2 = qualification, 3 = elimination), one per match number seen, in the order they came.
+ */
+export function matchIds(log: WPILog): MatchId[] {
+  const numbers = findSeries(log, ...FMS_NUMBER);
+  const types = findSeries(log, ...FMS_TYPE);
+  if (!numbers || !types) return [];
+  let event: string | undefined;
+  for (const [name, lines] of log.text) if (FMS_EVENT.some((n) => norm(n) === norm(name))) event = [...lines].reverse().find((l) => l.text.trim())?.text.trim() || event;
+  const out: MatchId[] = [];
+  for (let i = 0; i < numbers.t.length; i++) {
+    const number = numbers.v[i];
+    if (!(number > 0)) continue;
+    let code = 0;
+    for (let j = 0; j < types.t.length && types.t[j] <= numbers.t[i] + 0.5; j++) code = types.v[j];
+    const type = ({ 1: 'practice', 2: 'qualification', 3: 'elimination' } as Record<number, MatchKind>)[code];
+    if (type && !out.some((m) => m.type === type && m.number === number)) out.push({ event, type, number });
+  }
+  return out;
+}
+
+/**
+ * What a robot log's file name says. DataLogManager names logs FRC_yyyyMMdd_HHmmss and, once the field has told it
+ * which match this is, adds _EVENT_q22 (p practice, q qualification, e elimination). The time is the roboRIO's clock,
+ * which is UTC unless it was set otherwise.
+ */
+export function fileStamp(name: string): { unix: number; id?: MatchId } | undefined {
+  const m = /FRC_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})(?:_([A-Za-z0-9]+?)_([pqe])(\d+))?(?:\D|$)/i.exec(name.replace(/^.*[\/\\]/, ''));
+  if (!m) return undefined;
+  const [, y, mo, d, h, mi, s] = m.slice(1, 7).map(Number);
+  const unix = Date.UTC(y, mo - 1, d, h, mi, s) / 1000;
+  const type = m[8] ? matchKindOf(m[8]) : undefined;
+  return { unix, id: type ? { event: m[7], type, number: Number(m[9]) } : undefined };
 }

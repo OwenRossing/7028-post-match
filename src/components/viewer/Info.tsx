@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import type { Confidence } from '../../lib/aggregate';
-import type { ExtraInfo } from '../../lib/extras';
 import { fmtDateTime, fmtSpan } from '../../lib/time';
+import { RobotLogCard, robotSummary } from './RobotLogCard';
 import type { ViewCtx } from './types';
 
 interface Item {
@@ -159,7 +158,7 @@ export function Info({ ctx }: { ctx: ViewCtx }) {
             </p>
           )}
           {parsed.extras.map((x) => (
-            <RobotLog key={x.name} info={x} onRemove={() => ctx.removeLog(x.name)} />
+            <RobotLogCard key={x.name} info={x} onRemove={() => ctx.removeLog(x.name)} />
           ))}
           <div className="info-actions">
             <button className="btn small" onClick={ctx.addLogs}>
@@ -263,64 +262,6 @@ export function Info({ ctx }: { ctx: ViewCtx }) {
           })}
         </section>
       </div>
-    </div>
-  );
-}
-
-const FIT: Record<Confidence, string> = {
-  high: 'Lines up with the match',
-  medium: 'Probably lines up',
-  low: 'Weak match, treat with care',
-  none: 'Not lined up',
-};
-
-function robotSummary(extras: ExtraInfo[]): string {
-  if (!extras.length) return 'None added';
-  const ok = extras.filter((x) => x.ok);
-  if (!ok.length) return `${plural(extras.length, 'log')}, none readable`;
-  const aligned = ok.filter((x) => x.alignment && x.alignment.confidence !== 'none').length;
-  const roles = [...new Set(ok.map((x) => x.role))].join(' + ');
-  return `${roles}${ok.length > 1 ? ` · ${ok.length} logs` : ''}${aligned === ok.length ? '' : ` · ${ok.length - aligned} not lined up`}`;
-}
-
-function RobotLog({ info: x, onRemove }: { info: ExtraInfo; onRemove: () => void }) {
-  const a = x.alignment;
-  return (
-    <div className="robot-log">
-      <div className="robot-log-head">
-        <b>{x.name}</b>
-        <span className="faint">{[x.role, size(x.size), x.duration != null && fmtSpan(x.duration)].filter(Boolean).join(' · ')}</span>
-        <button className="btn small ghost" onClick={onRemove} title="Take this log off the match">
-          Remove
-        </button>
-      </div>
-      {!x.ok ? (
-        <p className="robot-log-note bad">{x.error}</p>
-      ) : (
-        <>
-          <p className={`robot-log-note ${a ? a.confidence : ''}`}>
-            <b>{a ? FIT[a.confidence] : 'Not checked'}.</b> {a?.detail}
-          </p>
-          {x.truncated && <p className="robot-log-note muted">The robot was still writing this log: the last record is partly written.</p>}
-          <details className="robot-log-signals">
-            <summary>
-              {plural(x.signals?.length ?? 0, 'signal')}
-              {x.consoleLines ? ` · ${plural(x.consoleLines, 'console line')}` : ''}
-            </summary>
-            <div className="info-list">
-              {(x.signals ?? []).slice(0, 400).map((s) => (
-                <div key={s.name} className="info-item static signal">
-                  <span className="mono">{s.name}</span>
-                  <span className="faint">
-                    {s.type} · {s.count.toLocaleString()}
-                  </span>
-                </div>
-              ))}
-              {(x.signals?.length ?? 0) > 400 && <p className="muted info-empty">…and {(x.signals!.length - 400).toLocaleString()} more.</p>}
-            </div>
-          </details>
-        </>
-      )}
     </div>
   );
 }

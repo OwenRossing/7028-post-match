@@ -1,5 +1,6 @@
 import { FLAG, ROBOT_MODE_MASK, type DSLog } from './dslog';
 import { parseTracer, type DSEvent, type DSEventsFile } from './dsevents';
+import type { DsAnchor } from './aggregate';
 import { fmtDuration, fmtSpan } from './time';
 
 export type Mode = 'disabled' | 'auto' | 'teleop' | 'test';
@@ -887,6 +888,8 @@ export interface LogSummary {
   hasEvents: boolean;
   /** Board numbers, for judging later matches against this one (see board.ts). */
   metrics?: Record<string, number>;
+  /** What a robot log needs to find this match later: when it was enabled and what the robot printed. */
+  anchor?: DsAnchor;
 }
 
 export function summarize(
