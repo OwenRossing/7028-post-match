@@ -3,6 +3,8 @@ import { analyze, computeStats, summarize } from '../lib/analysis';
 import { boardMetrics, buildBoard } from '../lib/board';
 import { parseDSEvents, type DSEventsFile } from '../lib/dsevents';
 import { dslogTransferables, parseDSLog, type DSLog } from '../lib/dslog';
+import { compactAnchor, dsAnchor } from '../lib/aggregate';
+import { describeExtra } from '../lib/extras';
 import type { WorkerRequest, WorkerResponse } from '../lib/workerClient';
 
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
@@ -10,8 +12,13 @@ const ctx = self as unknown as DedicatedWorkerGlobalScope;
 const message = (err: unknown) => String((err as Error)?.message ?? err);
 
 ctx.onmessage = (e: MessageEvent<WorkerRequest>) => {
-  const { id, kind, dslog, dsevents } = e.data;
+  const { id, kind, dslog, dsevents, extras } = e.data;
   try {
+    if (kind === 'probe') {
+      const res: WorkerResponse = { id, ok: true, probed: (extras ?? []).map((x) => describeExtra(x.name, x.kind, x.data, null)) };
+      ctx.postMessage(res);
+      return;
+    }
     let log: DSLog | null = null;
     let logError: string | undefined;
     if (dslog) {
@@ -37,11 +44,19 @@ ctx.onmessage = (e: MessageEvent<WorkerRequest>) => {
       const stats = computeStats(log, events, analysis, analysis.focus);
       const summary = summarize(log, events, analysis, stats);
       summary.metrics = boardMetrics(buildBoard(log, events, analysis, stats));
+      summary.anchor = compactAnchor(dsAnchor(log, events, analysis));
       const res: WorkerResponse = { id, ok: true, summary };
       ctx.postMessage(res);
     } else {
-      const warnings = [logError && `.dslog: ${logError}`, eventsError && `.dsevents: ${eventsError}`].filter(Boolean) as string[];
-      const res: WorkerResponse = { id, ok: true, parsed: { log, events, analysis: analyze(log, events), warnings } };
+      const analysis = analyze(log, events);
+      const anchor = extras?.length ? dsAnchor(log, events, analysis) : null;
+      const described = (extras ?? []).map((x) => describeExtra(x.name, x.kind, x.data, anchor));
+      const warnings = [
+        logError && `.dslog: ${logError}`,
+        eventsError && `.dsevents: ${eventsError}`,
+        ...described.filter((x) => !x.ok).map((x) => `${x.name}: ${x.error}`),
+      ].filter(Boolean) as string[];
+      const res: WorkerResponse = { id, ok: true, parsed: { log, events, analysis, extras: described, warnings } };
       ctx.postMessage(res, log ? dslogTransferables(log) : []);
     }
   } catch (err) {

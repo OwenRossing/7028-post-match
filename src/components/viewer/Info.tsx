@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { fmtDateTime, fmtSpan } from '../../lib/time';
+import { RobotLogCard, robotSummary } from './RobotLogCard';
 import type { ViewCtx } from './types';
 
 interface Item {
@@ -142,6 +143,28 @@ export function Info({ ctx }: { ctx: ViewCtx }) {
               ))}
             </div>
           )}
+        </>
+      ),
+    },
+    {
+      id: 'robot-logs',
+      title: 'Robot logs',
+      summary: robotSummary(parsed.extras),
+      body: (
+        <>
+          {parsed.extras.length === 0 && (
+            <p className="muted info-empty">
+              Nothing added yet. Add the roboRIO's .wpilog (or CTRE's, converted to .wpilog) for this match.
+            </p>
+          )}
+          {parsed.extras.map((x) => (
+            <RobotLogCard key={x.name} info={x} onRemove={() => ctx.removeLog(x.name)} />
+          ))}
+          <div className="info-actions">
+            <button className="btn small" onClick={ctx.addLogs}>
+              Add robot logs
+            </button>
+          </div>
         </>
       ),
     },

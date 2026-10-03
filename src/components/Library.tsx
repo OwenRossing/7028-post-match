@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { MIN_HISTORY, type HistoryStatus } from '../lib/baseline';
-import { versionKey, type LogEntry } from '../lib/library';
+import { hasDS, summaryKeyOf, type LogEntry } from '../lib/library';
 import { fmtClock, fmtDate, fmtSpan } from '../lib/time';
+import { FileChips } from './FileChips';
 import { Icon } from './Icon';
 
 type Filter = 'all' | 'matches' | 'enabled' | 'issues';
@@ -50,6 +51,7 @@ function matchesQuery(e: LogEntry, q: string): boolean {
 }
 
 function shortTitle(e: LogEntry): string {
+  if (e.robot) return e.robot.title;
   const s = e.summary;
   if (!s) return e.key;
   if (s.isMatch && s.matchType && s.matchNumber && s.fms) {
@@ -114,6 +116,7 @@ export function Library(props: Props) {
   }, [shown]);
 
   const hasSaved = entries.some((e) => e.source === 'saved' || e.source === 'upload');
+  const stored = useStorageUsed(entries.length);
 
   return (
     <aside className="sidebar">
@@ -229,7 +232,7 @@ export function Library(props: Props) {
           <div key={g.label}>
             <div className="lib-group">
               <span>{g.label}</span>
-              <span>{[...g.events].join(', ')}</span>
+              <span>{[...g.events, `${g.items.length} ${g.items.length === 1 ? 'match' : 'matches'}`].join(' · ')}</span>
             </div>
             {g.items.map((e) => (
               <Row
@@ -241,7 +244,7 @@ export function Library(props: Props) {
                 inBaseline={!compareSelecting && !!status?.get(e.key)?.used}
                 showFile={filterByBaseline}
                 reason={status && e.key !== selectedKey ? (status.get(e.key) as { reason?: string } | undefined)?.reason : undefined}
-                onClick={() => (compareSelecting ? props.toggleCompare(e.key) : onSelect(e.key))}
+                onClick={() => (compareSelecting ? hasDS(e) && props.toggleCompare(e.key) : onSelect(e.key))}
               />
             ))}
           </div>
@@ -249,7 +252,9 @@ export function Library(props: Props) {
       </div>
       {hasSaved && (
         <div className="sidebar-foot">
-          <span>Saved in this browser</span>
+          <span title="Logs are kept in this browser, so there is no limit but the browser's own: it holds as much as your disk allows">
+            Saved in this browser{stored ? ` · ${stored}` : ''}
+          </span>
           <button
             className="btn small ghost"
             onClick={() =>
@@ -263,6 +268,25 @@ export function Library(props: Props) {
       )}
     </aside>
   );
+}
+
+/** How much this browser is holding for the app, e.g. "148 MB". Re-read whenever the number of logs changes. */
+function useStorageUsed(dep: number): string {
+  const [text, setText] = useState('');
+  useEffect(() => {
+    let cancelled = false;
+    navigator.storage?.estimate?.().then(
+      (e) => {
+        if (cancelled || e.usage == null) return;
+        setText(e.usage >= 1e9 ? `${(e.usage / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(e.usage / 1e6))} MB`);
+      },
+      () => undefined,
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [dep]);
+  return text;
 }
 
 function Row({
@@ -288,7 +312,7 @@ function Row({
   onClick: () => void;
 }) {
   const s = e.summary;
-  const pending = e.summaryKey !== versionKey(e) && !e.summaryError;
+  const pending = hasDS(e) && e.summaryKey !== summaryKeyOf(e) && !e.summaryError;
   const live = (e.source === 'folder' || e.source === 'companion') && Date.now() - (e.dslog?.mtime ?? 0) < 20000;
   const idle = s && !s.enabledTime && !s.isMatch;
   return (
@@ -314,12 +338,14 @@ function Row({
       {showFile && (
         <div className="lib-file mono" title="The files read for this match">
           {e.key}
-          <span>{[e.dslog && '.dslog', e.dsevents && '.dsevents'].filter(Boolean).join(' + ')}</span>
+          <span>{[e.dslog && '.dslog', e.dsevents && '.dsevents', ...(e.extras ?? []).map((x) => `.${x.kind}`)].filter(Boolean).join(' + ')}</span>
         </div>
       )}
       <div className="meta">
         {e.summaryError ? (
           <span style={{ color: 'var(--bad)' }}>Unreadable: {e.summaryError}</span>
+        ) : e.robot ? (
+          <span>Robot log only · waiting for the Driver Station log</span>
         ) : s ? (
           <span>
             {[
@@ -342,6 +368,9 @@ function Row({
             <span className="live-dot" style={{ width: 6, height: 6 }} /> live
           </span>
         )}
+      </div>
+      <div className="lib-chips">
+        <FileChips entry={e} compact />
       </div>
     </div>
   );

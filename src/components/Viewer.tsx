@@ -3,16 +3,18 @@ import { createPortal } from 'react-dom';
 import { computeStats, findProblems, problemStops, stepProblem } from '../lib/analysis';
 import { ChartGroup, type Marker } from '../lib/chartGroup';
 import { download, eventsToCsv, logToCsv, safeFileName, summaryMarkdown } from '../lib/export';
-import type { LogEntry } from '../lib/library';
+import { hasDS, type LogEntry } from '../lib/library';
 import { channelLabelKey, type Settings } from '../lib/settings';
 import type { ChartTheme } from '../lib/theme';
 import { fmtDateTime, fmtSpan } from '../lib/time';
 import { makeTimeFormat } from '../lib/timefmt';
 import type { ParsedState } from '../lib/useParsed';
+import { FileChips } from './FileChips';
 import { Icon } from './Icon';
 import { KeyBar } from './KeyBar';
 import { Scrim } from './Scrim';
 import { Board } from './viewer/Board';
+import { RobotOnly } from './viewer/RobotOnly';
 import { EventsView } from './viewer/EventsView';
 import { CHART_SIGNALS, Graphs } from './viewer/Graphs';
 import { Info } from './viewer/Info';
@@ -30,6 +32,9 @@ interface Props {
   /** The top bar's slot for the title and tabs; without one the header renders in place. */
   headSlot?: HTMLElement | null;
   onCompare: () => void;
+  /** Opens a file picker for roboRIO / CTRE logs to add to this match. */
+  onAddLogs: () => void;
+  onRemoveLog: (name: string) => void;
   onRemove?: () => void;
   toast: (title: string, msg?: string, kind?: 'info' | 'error' | 'success') => void;
 }
@@ -48,6 +53,8 @@ function isTyping(e: KeyboardEvent) {
 
 export function Viewer(props: Props) {
   const { entry, state } = props;
+  if (!hasDS(entry))
+    return <RobotOnly entry={entry} headSlot={props.headSlot} onAddLogs={props.onAddLogs} onRemoveLog={props.onRemoveLog} onRemove={() => props.onRemove?.()} />;
   if (state.status === 'error')
     return (
       <div className="center-state">
@@ -85,6 +92,8 @@ function LoadedViewer({
   setTab,
   headSlot,
   onCompare,
+  onAddLogs,
+  onRemoveLog,
   onRemove,
   toast,
 }: Props & { parsed: NonNullable<ParsedState['data']>; refreshing: boolean }) {
@@ -171,7 +180,7 @@ function LoadedViewer({
 
   const focusStats = useMemo(() => computeStats(log, events, analysis, analysis.focus), [log, events, analysis]);
   const focusProblems = useMemo(() => findProblems(log, events, analysis, focusStats), [log, events, analysis, focusStats]);
-  const ctx: ViewCtx = { entry, parsed, group, theme, settings, tf, labels, labelKey, problems: focusProblems, jumpTo, showEvents, setTab };
+  const ctx: ViewCtx = { entry, parsed, group, theme, settings, tf, labels, labelKey, problems: focusProblems, jumpTo, showEvents, setTab, addLogs: onAddLogs, removeLog: onRemoveLog };
   const verdict = focusProblems.some((p) => p.severity === 'bad') ? 'bad' : focusProblems.some((p) => p.severity === 'warn') ? 'warn' : 'ok';
   const live = (entry.source === 'folder' || entry.source === 'companion') && Date.now() - (entry.dslog?.mtime ?? 0) < 20000;
 
@@ -299,6 +308,7 @@ function LoadedViewer({
           </span>
         )}
         {refreshing && <div className="spinner" style={{ width: 13, height: 13 }} />}
+        <FileChips entry={entry} compact showMissing onAddRobot={onAddLogs} />
         <span className="vhead-sub">
           {whoWhere}
           <span className="vhead-date">
@@ -322,6 +332,13 @@ function LoadedViewer({
                   <span>
                     Copy summary
                     <small>The fix list as text for Discord / Slack</small>
+                  </span>
+                </button>
+                <button className="item" onClick={onAddLogs}>
+                  <Icon name="plug" />
+                  <span>
+                    Add robot logs
+                    <small>roboRIO or CTRE .wpilog files for this match</small>
                   </span>
                 </button>
                 <button className="item" onClick={onCompare}>

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { versionKey, type LogEntry } from './library';
+import { hasDS, versionKey, type LogEntry } from './library';
 import { parseLog, type ParsedLog } from './workerClient';
 
 const cache = new Map<string, Promise<ParsedLog>>();
@@ -10,8 +10,12 @@ export function loadParsed(entry: LogEntry): Promise<ParsedLog> {
   let p = cache.get(key);
   if (!p) {
     p = (async () => {
-      const [a, b] = await Promise.all([entry.dslog?.read(), entry.dsevents?.read()]);
-      return parseLog(a, b);
+      const [a, b, x] = await Promise.all([
+        entry.dslog?.read(),
+        entry.dsevents?.read(),
+        Promise.all((entry.extras ?? []).map(async (e) => ({ name: e.file.name, kind: e.kind, data: await e.file.read() }))),
+      ]);
+      return parseLog(a, b, x);
     })();
     cache.set(key, p);
     p.catch(() => cache.delete(key));
@@ -35,6 +39,8 @@ export interface ParsedState {
 }
 
 export function useParsed(entry: LogEntry | undefined): ParsedState {
+  // a match that has only robot logs has nothing for the DS parser to read
+  if (entry && !hasDS(entry)) entry = undefined;
   const [state, setState] = useState<ParsedState>({ status: 'idle' });
   const vkey = entry ? versionKey(entry) : '';
 
