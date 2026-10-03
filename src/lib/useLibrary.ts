@@ -28,6 +28,7 @@ import {
   type LogEntry,
   type SourceKind,
 } from './library';
+import { planDelete } from './manage';
 import { robotKey, RobotLogStore } from './robotLogs';
 import { getSettings } from './settings';
 import { probeExtras, summarizeLog } from './workerClient';
@@ -114,14 +115,25 @@ export function useLibrary(opts: {
   // Robot logs and the matches made only of them. Kept apart from the entries so they survive a folder rescan.
   const store = useRef(new RobotLogStore()).current;
 
+  // Matches from a watched folder that the user deleted. Deleting never touches the folder, so they are hidden instead,
+  // and stay hidden through rescans and restarts until shown again.
+  const hidden = useRef(new Set<string>()).current;
+  const [hiddenMatches, setHiddenMatches] = useState(0);
+
   const setEntries = useCallback(
     (fn: (m: Map<string, LogEntry>) => Map<string, LogEntry>) => {
-      const next = store.applyTo(fn(entriesRef.current));
+      let next = store.applyTo(fn(entriesRef.current));
+      if (hidden.size && [...hidden].some((k) => next.has(k))) next = new Map([...next].filter(([k]) => !hidden.has(k)));
       entriesRef.current = next;
       setEntriesState(next);
     },
-    [store],
+    [store, hidden],
   );
+
+  const saveHidden = useCallback(async () => {
+    setHiddenMatches(hidden.size);
+    await idb.set('kv', 'hiddenMatches', [...hidden]).catch(() => undefined);
+  }, [hidden]);
 
   /** Replaces every entry of one source with a fresh listing, reporting brand new logs. */
   const syncSource = useCallback(
@@ -147,6 +159,8 @@ export function useLibrary(opts: {
       const refs = files.map(fileRefFromFile);
       const incoming = pairFiles(refs, 'upload');
       if (!incoming.length) return [];
+      // adding a match by hand is asking for it, even if it was deleted from a watched folder before
+      if (incoming.some((e) => hidden.delete(e.key))) void saveHidden();
       setEntries((cur) => mergeEntries(cur, incoming));
       if (getSettings().persistUploads) {
         try {
@@ -165,7 +179,7 @@ export function useLibrary(opts: {
       }
       return incoming.map((e) => entriesRef.current.get(e.key) ?? e);
     },
-    [setEntries],
+    [setEntries, hidden, saveHidden],
   );
 
   const skipSaving = (key: string) => entriesRef.current.get(key)?.source === 'sample'; // the sample is not saved, so nothing attached to it is either
@@ -396,25 +410,57 @@ export function useLibrary(opts: {
       );
   }, [entries, store, setEntries]);
 
-  const removeEntry = useCallback(
-    async (key: string) => {
-      const e = entriesRef.current.get(key);
-      const dropped = store.dropMatch(key);
+  /**
+   * Deletes matches from the library: saved copies and attached robot logs are removed from this browser, and matches that
+   * come from a watched folder are hidden (the folder's files are never touched). Resolves with how many went.
+   */
+  const deleteEntries = useCallback(
+    async (keys: string[]): Promise<number> => {
+      const plan = planDelete(entriesRef.current.values(), keys);
+      if (!plan.keys.length) return 0;
+      for (const k of plan.hide) hidden.add(k);
+      const dropped = plan.keys.flatMap((k) => store.dropMatch(k));
       setEntries((cur) => {
         const next = new Map(cur);
-        next.delete(key);
+        for (const k of plan.keys) next.delete(k);
         return next;
       });
-      if (dropped.length) await store.save(skipSaving, dropped);
-      if (e && (e.source === 'saved' || e.source === 'upload')) {
-        const names = [e.dslog?.name, e.dsevents?.name].filter(Boolean) as string[];
-        const index = ((await idb.get<SavedMeta[]>('kv', 'savedIndex')) ?? []).filter((m) => !names.includes(m.name));
-        await idb.set('kv', 'savedIndex', index);
-        for (const n of names) await idb.del('files', n);
+      try {
+        await saveHidden();
+        await store.save(skipSaving, dropped);
+        if (plan.saved.length) {
+          const index = ((await idb.get<SavedMeta[]>('kv', 'savedIndex')) ?? []).filter((m) => !plan.saved.includes(m.name));
+          await idb.set('kv', 'savedIndex', index);
+          for (const n of plan.saved) await idb.del('files', n);
+        }
+        for (const k of plan.summaryKeys) await idb.del('summaries', `${k}#${SUMMARY_VERSION}`);
+      } catch {
+        optsRef.current.onError('Could not finish deleting', 'Browser storage was not available. The matches are gone for this visit and may reappear next time.');
       }
+      return plan.keys.length;
     },
-    [setEntries],
+    [setEntries, store, hidden, saveHidden],
   );
+
+  const removeEntry = useCallback((key: string) => deleteEntries([key]), [deleteEntries]);
+
+  /** Empties the library: everything saved here is removed, and what a watched folder holds now is hidden, so only matches that arrive from now on appear. */
+  const clearAll = useCallback(async () => {
+    const plan = planDelete(entriesRef.current.values(), [...entriesRef.current.keys()]);
+    for (const k of plan.hide) hidden.add(k);
+    store.dropAll();
+    setEntries(() => new Map());
+    try {
+      await saveHidden();
+      await idb.clear('files');
+      await idb.set('kv', 'savedIndex', []);
+      await idb.clear('summaries');
+      await store.save(skipSaving);
+    } catch {
+      optsRef.current.onError('Could not finish clearing', 'Browser storage was not available. The library is empty for this visit and may refill next time.');
+    }
+    return plan.counts.total;
+  }, [setEntries, store, hidden, saveHidden]);
 
   const clearSaved = useCallback(async () => {
     await idb.clear('files');
@@ -571,6 +617,22 @@ export function useLibrary(opts: {
     setEntries((cur) => new Map([...cur].filter(([, e]) => e.source !== 'companion')));
   }, [setEntries, store]);
 
+  /** Brings back everything that was hidden: matches deleted from watched folders, and robot-folder logs taken off a match. */
+  const showHidden = useCallback(async () => {
+    hidden.clear();
+    await saveHidden();
+    store.showHiddenRemote();
+    await store.save(skipSaving);
+    // read the watched sources again, so what was hidden is listed again
+    folderSig.current = '';
+    void scanNow(false);
+    companionSig.current = '';
+    if (companionUrl.current) {
+      void refreshCompanion(companionUrl.current, false);
+      void syncRobot(companionUrl.current);
+    }
+  }, [hidden, saveHidden, store, scanNow, refreshCompanion, syncRobot]);
+
   // ---------- Startup ----------
 
   useEffect(() => {
@@ -578,6 +640,8 @@ export function useLibrary(opts: {
     (async () => {
       const index = (await idb.get<SavedMeta[]>('kv', 'savedIndex')) ?? [];
       await store.load();
+      for (const k of (await idb.get<string[]>('kv', 'hiddenMatches')) ?? []) hidden.add(k);
+      setHiddenMatches(hidden.size);
       if (!cancelled) setEntries((cur) => mergeEntries(cur, pairFiles(index.map(savedRef), 'saved')));
       if (folderSupported()) {
         const saved = await savedFolder();
@@ -656,8 +720,12 @@ export function useLibrary(opts: {
     detachExtra,
     robot,
     hiddenRobotLogs: store.hiddenRemote(),
+    hiddenMatches,
     showHiddenRobotLogs,
+    showHidden,
     removeEntry,
+    deleteEntries,
+    clearAll,
     clearSaved,
     loadSample,
     connectFolder,

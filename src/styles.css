@@ -681,6 +681,40 @@ code {
   color: var(--faint);
 }
 
+.btn.danger {
+  color: var(--bad);
+  border-color: var(--bad);
+  background: transparent;
+}
+.btn.danger:hover:not(:disabled) {
+  background: var(--bad);
+  color: #fff;
+}
+.btn.danger:disabled {
+  opacity: 0.45;
+}
+.manage-bar {
+  background: var(--panel-2, var(--accent-weak));
+}
+.manage-more {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.lib-group-pick {
+  accent-color: var(--accent);
+  margin: 0 8px 0 0;
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+.lib-group span:last-child {
+  margin-left: auto;
+}
+
 .compare-bar {
   display: flex;
   align-items: center;

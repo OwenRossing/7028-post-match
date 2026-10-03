@@ -334,6 +334,24 @@ export default function App() {
             await library.clearSaved();
             toast('Saved logs removed', undefined, 'success');
           }}
+          hidden={library.hiddenMatches + library.hiddenRobotLogs}
+          onShowHidden={async () => {
+            await library.showHidden();
+            toast('Showing everything again', 'Matches and robot logs you deleted from a watched folder are listed again.', 'success');
+          }}
+          onDelete={async (keys) => {
+            const n = await library.deleteEntries(keys);
+            if (selectedKey && keys.includes(selectedKey)) setSelectedKey(null);
+            setCompareKeys((ks) => ks.filter((k) => !keys.includes(k)));
+            toast(n === 1 ? 'Deleted 1 match' : `Deleted ${n} matches`, 'Files in your Driver Station and robot-log folders are not touched.', 'success');
+          }}
+          onClearAll={async () => {
+            const n = await library.clearAll();
+            setSelectedKey(null);
+            setCompareKeys([]);
+            setView('main');
+            toast('Library cleared', n ? `${n} ${n === 1 ? 'match' : 'matches'} removed. Matches that arrive from now on still appear.` : undefined, 'success');
+          }}
         />
         <main className="content">
           {view === 'compare' && compareEntries.length >= 2 ? (
@@ -370,14 +388,10 @@ export default function App() {
                 setMobileSidebar(true);
                 toast('Pick logs to compare', 'Tick up to 5 more logs in the library, then press Compare.');
               }}
-              onRemove={
-                selected.source === 'saved' || selected.source === 'upload' || selected.source === 'sample'
-                  ? () => {
-                      void library.removeEntry(selected.key);
-                      setSelectedKey(null);
-                    }
-                  : undefined
-              }
+              onRemove={() => {
+                void library.removeEntry(selected.key);
+                setSelectedKey(null);
+              }}
               toast={(t, m, k) => toast(t, m, k)}
             />
           ) : (

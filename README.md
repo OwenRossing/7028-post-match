@@ -61,6 +61,17 @@ The desktop app is PitView with an engine inside it that does what a browser can
 
 Run it from source with `npm run build`, then `cd desktop && npm install && npm start`.
 
+## Managing logs
+
+Open the library (the **Logs** button) and press **Manage**.
+
+- **Pick matches** with the checkboxes (a day's checkbox picks the whole day, **All** picks everything shown) and press **Delete**. You are asked first, and told exactly what happens.
+- **Clear the whole library…** empties it in one go.
+- **Saved matches** (opened by dropping or choosing files) are removed from this browser, with the robot logs attached to them.
+- **Matches from a watched folder or the companion are hidden, not deleted.** PitView only ever reads those folders, so their files are never touched, and a match you deleted stays hidden through rescans and restarts. Matches that arrive from now on still appear. **Show hidden** (in Manage, or at the bottom of the library) brings back everything hidden, including robot-folder logs you took off a match.
+- A single match can also be removed from the **⋯** menu while it is open.
+- Adding a match by hand (dropping its files) always shows it, even if it was hidden before.
+
 ## Auto-loading the latest match on the DS laptop
 
 Three ways to do it, from least to most setup:
@@ -102,6 +113,7 @@ src/lib/wpilog.ts       WPILib DataLog (.wpilog) decoder: roboRIO logs, and CTRE
 src/lib/aggregate.ts    lining a robot log up with the DS timeline; which matches a log belongs to
 src/lib/extras.ts       reading one attached log: role, signals, alignment
 src/lib/robotLogs.ts   which robot logs are on which match; robot-only matches; saved between visits
+src/lib/manage.ts      what deleting matches removes and what it only hides, and the words that ask first
 src/lib/hoot.ts         CTRE .hoot: describes a file (the layout is not published); where a decoder goes
 src/lib/diagnostics.ts  the text summaries behind Copy diagnostics
 src/lib/analysis.ts     modes, matches, comms drops, code stalls, stats, findings, library summaries

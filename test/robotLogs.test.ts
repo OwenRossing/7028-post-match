@@ -222,6 +222,37 @@ describe('RobotLogStore', () => {
       expect(b.hiddenRemote()).toBe(0);
     });
 
+    it('stay hidden when the whole match is deleted, so they do not come back as a match of their own', () => {
+      const s = new RobotLogStore(fakeDb());
+      s.add('q22', remote('a.hoot', 'id1:default'));
+      s.add('q22', extra('own.wpilog', anchors(DS_START, 100)));
+      expect(s.dropMatch('q22').sort()).toEqual(['a.hoot', 'own.wpilog']);
+      expect(s.isDismissed('a.hoot', 'remote')).toBe(true); // from the robot-log folder: hidden until shown again
+      expect(s.isDismissed('own.wpilog', 'remote')).toBe(false); // added by hand: just gone
+      expect(s.extrasFor('q22')).toBeUndefined();
+    });
+
+    it('all stay hidden when the library is cleared, along with what was dismissed before', async () => {
+      const db = fakeDb();
+      const s = new RobotLogStore(db);
+      s.add('q22', remote('a.hoot', 'id1:default'));
+      s.addRobotMatch('robot:b.hoot', { startTime: 1, title: 'b' });
+      s.add('robot:b.hoot', remote('b.hoot', 'id2:default'));
+      s.add('q23', extra('own.wpilog', anchors(DS_START, 100)));
+      s.add('q23', extra('gone.wpilog', anchors(DS_START, 100)));
+      s.remove('q23', 'gone.wpilog'); // dismissed earlier, by hand
+      expect(s.dropAll().sort()).toEqual(['a.hoot', 'b.hoot', 'own.wpilog']);
+      expect(s.isRobotMatch('robot:b.hoot')).toBe(false);
+      expect(s.extrasFor('q22')).toBeUndefined();
+      expect(s.isDismissed('a.hoot', 'remote')).toBe(true);
+      expect(s.isDismissed('b.hoot', 'remote')).toBe(true);
+      expect(s.isDismissed('gone.wpilog', 'q23')).toBe(true); // clearing does not forget what the user dismissed
+      await s.save();
+      const b = new RobotLogStore(db);
+      await b.load();
+      expect(b.hiddenRemote()).toBe(2);
+    });
+
     it('removing a log added by hand does not hide anything from the folder', () => {
       const s = new RobotLogStore(fakeDb());
       s.add('q22', extra('own.wpilog', anchors(DS_START, 100)));

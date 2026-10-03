@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { MIN_HISTORY, type HistoryStatus } from '../lib/baseline';
 import { hasDS, summaryKeyOf, type LogEntry } from '../lib/library';
+import { describeDelete, planDelete } from '../lib/manage';
 import { fmtClock, fmtDate, fmtSpan } from '../lib/time';
 import { FileChips } from './FileChips';
 import { Icon } from './Icon';
@@ -28,6 +29,13 @@ interface Props {
   cancelCompare: () => void;
   beginCompare: () => void;
   onClearSaved: () => void;
+  /** Deletes matches (saved ones are removed, ones from a watched folder are hidden). */
+  onDelete: (keys: string[]) => void | Promise<void>;
+  /** Empties the library. */
+  onClearAll: () => void | Promise<void>;
+  /** How many matches and robot logs are hidden (deleted from a watched folder). */
+  hidden: number;
+  onShowHidden: () => void;
 }
 
 function matchesQuery(e: LogEntry, q: string): boolean {
@@ -73,6 +81,8 @@ export function Library(props: Props) {
   const [q, setQ] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
   const [onlyBaseline, setOnlyBaseline] = useState(false);
+  const [managing, setManaging] = useState(false);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
   const status = baseline && !baseline.demo ? baseline.status : null;
   const used = useMemo(() => entries.filter((e) => status?.get(e.key)?.used), [entries, status]);
   const skipped = useMemo(
@@ -118,6 +128,36 @@ export function Library(props: Props) {
   const hasSaved = entries.some((e) => e.source === 'saved' || e.source === 'upload');
   const stored = useStorageUsed(entries.length);
 
+  // ---- managing: pick matches and delete them, or clear the library ----
+  const chosen = useMemo(() => {
+    const have = new Set(entries.map((e) => e.key));
+    return [...picked].filter((k) => have.has(k));
+  }, [picked, entries]);
+  const setMany = (keys: string[], on: boolean) =>
+    setPicked((s) => {
+      const n = new Set(s);
+      for (const k of keys) (on ? n.add(k) : n.delete(k));
+      return n;
+    });
+  const leave = () => {
+    setManaging(false);
+    setPicked(new Set());
+  };
+  useEffect(() => {
+    if (managing && !entries.length) leave();
+  }, [managing, entries.length]);
+  const allShown = shown.length > 0 && shown.every((e) => picked.has(e.key));
+  const removeChosen = async () => {
+    if (!chosen.length || !confirm(describeDelete(planDelete(entries, chosen)))) return;
+    await props.onDelete(chosen);
+    setPicked(new Set());
+  };
+  const clearAll = () => {
+    if (!confirm(describeDelete(planDelete(entries, entries.map((e) => e.key)), { all: true }))) return;
+    void props.onClearAll();
+    leave();
+  };
+
   return (
     <aside className="sidebar">
       {compareSelecting && (
@@ -135,6 +175,34 @@ export function Library(props: Props) {
           </span>
         </div>
       )}
+      {managing && !compareSelecting && (
+        <>
+          <div className="compare-bar manage-bar">
+            <span>{chosen.length ? <b>{chosen.length} selected</b> : 'Pick matches to delete'}</span>
+            <span className="row" style={{ gap: 4 }}>
+              <button className="btn small ghost" onClick={() => setMany(shown.map((e) => e.key), !allShown)}>
+                {allShown ? 'None' : 'All'}
+              </button>
+              <button className="btn small danger" disabled={!chosen.length} onClick={() => void removeChosen()}>
+                <Icon name="trash" size={13} /> Delete
+              </button>
+              <button className="btn small ghost" onClick={leave}>
+                Done
+              </button>
+            </span>
+          </div>
+          <div className="manage-more">
+            <button className="link" onClick={clearAll}>
+              Clear the whole library…
+            </button>
+            {props.hidden > 0 && (
+              <button className="link" onClick={props.onShowHidden}>
+                Show {props.hidden} hidden
+              </button>
+            )}
+          </div>
+        </>
+      )}
       <div className="sidebar-head">
         <div className="sidebar-title">
           <span>Library · {entries.length}</span>
@@ -148,7 +216,17 @@ export function Library(props: Props) {
                 <span className="spinner" style={{ width: 11, height: 11, borderWidth: 1.5 }} /> {indexing}
               </span>
             )}
-            {!compareSelecting && entries.length > 1 && (
+            {!compareSelecting && !managing && entries.length > 0 && (
+              <button
+                className="btn small ghost"
+                onClick={() => setManaging(true)}
+                title="Pick matches to delete, or clear the library"
+                style={{ textTransform: 'none', letterSpacing: 0 }}
+              >
+                <Icon name="list" size={13} /> Manage
+              </button>
+            )}
+            {!compareSelecting && !managing && entries.length > 1 && (
               <button
                 className="btn small ghost"
                 onClick={props.beginCompare}
@@ -231,6 +309,15 @@ export function Library(props: Props) {
         {groups.map((g) => (
           <div key={g.label}>
             <div className="lib-group">
+              {managing && (
+                <input
+                  type="checkbox"
+                  className="lib-group-pick"
+                  aria-label={`Select all matches on ${g.label}`}
+                  checked={g.items.every((e) => picked.has(e.key))}
+                  onChange={(ev) => setMany(g.items.map((e) => e.key), ev.target.checked)}
+                />
+              )}
               <span>{g.label}</span>
               <span>{[...g.events, `${g.items.length} ${g.items.length === 1 ? 'match' : 'matches'}`].join(' · ')}</span>
             </div>
@@ -239,31 +326,42 @@ export function Library(props: Props) {
                 key={e.key}
                 e={e}
                 selected={selectedKey === e.key}
-                compare={compareSelecting}
-                checked={compareKeys.includes(e.key)}
-                inBaseline={!compareSelecting && !!status?.get(e.key)?.used}
+                compare={compareSelecting || managing}
+                checked={managing ? picked.has(e.key) : compareKeys.includes(e.key)}
+                inBaseline={!compareSelecting && !managing && !!status?.get(e.key)?.used}
                 showFile={filterByBaseline}
                 reason={status && e.key !== selectedKey ? (status.get(e.key) as { reason?: string } | undefined)?.reason : undefined}
-                onClick={() => (compareSelecting ? hasDS(e) && props.toggleCompare(e.key) : onSelect(e.key))}
+                onClick={() =>
+                  managing ? setMany([e.key], !picked.has(e.key)) : compareSelecting ? hasDS(e) && props.toggleCompare(e.key) : onSelect(e.key)
+                }
               />
             ))}
           </div>
         ))}
       </div>
-      {hasSaved && (
+      {(hasSaved || props.hidden > 0) && (
         <div className="sidebar-foot">
           <span title="Logs are kept in this browser, so there is no limit but the browser's own: it holds as much as your disk allows">
-            Saved in this browser{stored ? ` · ${stored}` : ''}
+            {hasSaved ? `Saved in this browser${stored ? ` · ${stored}` : ''}` : `${props.hidden} hidden`}
           </span>
-          <button
-            className="btn small ghost"
-            onClick={() =>
-              confirm('Remove all saved logs from this browser? Logs in a connected folder are not affected.') && props.onClearSaved()
-            }
-            title="Remove saved logs"
-          >
-            <Icon name="trash" size={13} />
-          </button>
+          <span className="row" style={{ gap: 4 }}>
+            {props.hidden > 0 && (
+              <button className="btn small ghost" onClick={props.onShowHidden} title="Bring back matches and robot logs you deleted from a watched folder">
+                Show {props.hidden} hidden
+              </button>
+            )}
+            {hasSaved && (
+              <button
+                className="btn small ghost"
+                onClick={() =>
+                  confirm('Remove all saved logs from this browser? Logs in a connected folder are not affected.') && props.onClearSaved()
+                }
+                title="Remove saved logs"
+              >
+                <Icon name="trash" size={13} />
+              </button>
+            )}
+          </span>
         </div>
       )}
     </aside>

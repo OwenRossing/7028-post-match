@@ -201,12 +201,29 @@ export class RobotLogStore {
     this.dismissed.add(`${name}@${key}`);
   }
 
-  /** Forgets a match and everything attached to it. Returns the log names that were on it. */
+  /**
+   * Forgets a match and everything attached to it. Returns the log names that were on it. A log from the robot-log folder
+   * stays hidden: it would otherwise come straight back, as a match of its own, the next time the folder is read.
+   */
   dropMatch(key: string): string[] {
-    const names = (this.attached.get(key) ?? []).map((x) => x.file.name);
+    const list = this.attached.get(key) ?? [];
+    for (const x of list) if (x.remote) this.dismissed.add(`${x.file.name}@remote`);
     this.attached.delete(key);
     this.matches.delete(key);
-    return names;
+    return list.map((x) => x.file.name);
+  }
+
+  /** Forgets every attached log and robot match. Logs from the robot-log folder stay hidden, and so does what the user dismissed. Returns the names that were attached. */
+  dropAll(): string[] {
+    const names = new Set<string>();
+    for (const list of this.attached.values())
+      for (const x of list) {
+        names.add(x.file.name);
+        if (x.remote) this.dismissed.add(`${x.file.name}@remote`);
+      }
+    this.attached.clear();
+    this.matches.clear();
+    return [...names];
   }
 
   /** The library's entries with robot logs attached and robot matches present. Returns the same map when nothing changes. */
