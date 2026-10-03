@@ -95,13 +95,24 @@ export function isWPILog(bytes: Uint8Array): boolean {
 export interface WPILogOptions {
   /** Return false to count an entry's records without storing its values. */
   keep?: (name: string, type: string) => boolean;
+  /**
+   * Also store arrays of numbers (float[], double[], int64[]), one series per element named `name[0]`, `name[1]`…, up to
+   * 64 elements. Off by default: a log of swerve states or vision targets has a lot of them.
+   */
+  arrays?: boolean;
 }
+
+/** Longest array whose elements are kept as series (a PDH has 24 channels). */
+const MAX_ARRAY = 64;
+const ARRAY_WIDTH: Record<string, number> = { 'float[]': 4, 'double[]': 8, 'int64[]': 8 };
 
 interface Live {
   entry: WPILogEntry;
   t: number[];
   v: number[];
   text: WPILogText[];
+  /** Elements of array records, one series each. */
+  cols: { t: number[]; v: number[] }[];
 }
 
 export function parseWPILog(bytes: Uint8Array, opts: WPILogOptions = {}): WPILog {
@@ -163,7 +174,7 @@ export function parseWPILog(bytes: Uint8Array, opts: WPILogOptions = {}): WPILog
           continue;
         }
         const entry: WPILogEntry = { id: eid, name: name[0], type: type[0], metadata: meta[0], kind: kindOf(type[0]), start: ts, count: 0 };
-        const l: Live = { entry, t: [], v: [], text: [] };
+        const l: Live = { entry, t: [], v: [], text: [], cols: [] };
         live.set(eid, l);
         all.push(l);
       } else if (ctl === 1 && size >= 5) {
@@ -202,8 +213,21 @@ export function parseWPILog(bytes: Uint8Array, opts: WPILogOptions = {}): WPILog
       case 'json':
         l.text.push({ t: ts, text: decoder.decode(bytes.subarray(p0, p1)) });
         break;
+      case 'float[]':
+      case 'double[]':
+      case 'int64[]': {
+        if (!opts.arrays) break;
+        const w = ARRAY_WIDTH[e.type];
+        const n = Math.min(MAX_ARRAY, Math.floor(size / w));
+        for (let k = 0; k < n; k++) {
+          const c = (l.cols[k] ??= { t: [], v: [] });
+          c.t.push(ts);
+          c.v.push(e.type === 'float[]' ? view.getFloat32(p0 + k * w, true) : e.type === 'double[]' ? view.getFloat64(p0 + k * w, true) : Number(view.getBigInt64(p0 + k * w, true)));
+        }
+        break;
+      }
       default:
-        break; // arrays, structs, protobuf and raw bytes are counted but not stored
+        break; // structs, protobuf, raw bytes and (unless asked for) arrays are counted but not stored
     }
   }
 
@@ -218,6 +242,9 @@ export function parseWPILog(bytes: Uint8Array, opts: WPILogOptions = {}): WPILog
       series.set(l.entry.name, { t, v });
     }
     if (l.text.length) text.set(l.entry.name, [...(text.get(l.entry.name) ?? []), ...l.text]);
+    l.cols.forEach((c, k) => {
+      if (c) series.set(`${l.entry.name}[${k}]`, { t: Float64Array.from(c.t), v: Float64Array.from(c.v) });
+    });
   }
   const hasData = Number.isFinite(first);
   return {

@@ -57,6 +57,20 @@ export function robotLogDiagnostics(infos: ExtraInfo[], maxSignals = 400): strin
   return out.join('\n');
 }
 
+/** What of the robot logs reached the graphs: how many signals, which were taken for motor currents (with their peaks), and which logs did not line up. */
+export function robotGraphLines(parsed: ParsedLog): string[] {
+  const robot = parsed.robot ?? [];
+  const currents = robot.filter((s) => s.kind === 'current');
+  const out = [`robot signals on the graphs: ${robot.length}${robot.length ? ` · ${currents.length} taken for motor currents` : ''}`];
+  const peaks = currents.map((s) => ({ s, peak: stats(s.arr).peak })).sort((a, b) => (b.peak || 0) - (a.peak || 0));
+  for (const { s, peak } of peaks.slice(0, 40)) out.push(`  ${s.label ?? s.name} | ${s.name} | peak ${n1(peak)} A`);
+  if (peaks.length > 40) out.push(`  …and ${peaks.length - 40} more`);
+  for (const x of parsed.extras)
+    if (x.ok && x.decoded !== false && (!x.alignment || (x.alignment.confidence !== 'high' && x.alignment.confidence !== 'medium')))
+      out.push(`not on the graphs: ${x.name}: ${x.alignment?.detail ?? 'nothing to line it up by'}`);
+  return out;
+}
+
 export function diagnosticsText(entry: LogEntry, parsed: ParsedLog): string {
   const { log, events, analysis } = parsed;
   const out: string[] = ['PitView diagnostics'];
@@ -99,7 +113,7 @@ export function diagnosticsText(entry: LogEntry, parsed: ParsedLog): string {
       `.dsevents: ${events.events.length} messages (${count('error')} errors, ${count('warning')} warnings) · DS ${events.meta.dsVersion ?? '?'} · team ${events.meta.team ?? '?'} · ${events.meta.eventName ?? 'no event name'}`,
     );
   }
-  if (parsed.extras.length) out.push(robotLogDiagnostics(parsed.extras));
+  if (parsed.extras.length) out.push(robotLogDiagnostics(parsed.extras), robotGraphLines(parsed).join('\n'));
   for (const w of parsed.warnings) out.push(`warning: ${w}`);
   return out.join('\n');
 }

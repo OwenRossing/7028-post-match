@@ -45,7 +45,7 @@ A match is the Driver Station's `.dslog` + `.dsevents` plus any robot logs (`.wp
 - Everything is saved in this browser (unless you turned saving off). There is no limit in PitView; the browser's own storage is the limit, and the Library shows how much is in use.
 - **A `.hoot`** is kept with its match like any other robot log (CTRE puts the event and match in the file name during a field match, and PitView uses that to find the match), but its signals are not read yet: CTRE does not publish the format. Its card has **Copy hoot diagnostics**, a short text description of the file (first bytes, readable text, how compressed it looks) that can be pasted to work out the layout without sending the file. Or convert it to `.wpilog` with CTRE's Owlet (`owlet -f wpilog in.hoot out.wpilog`) or Tuner X and add that. A hoot shows as an amber `CTRE hoot` chip until it can be read. **The [desktop app](#desktop-app) runs Owlet for you**, on every hoot in its robot-log folder.
 
-Today the robot logs are lined up, matched and kept with the match. Charting their signals and judging them against earlier matches comes next.
+Robot logs are lined up with the match, kept with it, and charted: see [Per-motor use](#per-motor-use). Judging them against earlier matches comes next.
 
 ## Desktop app
 
@@ -60,6 +60,18 @@ The desktop app is PitView with an engine inside it that does what a browser can
 - **Your library stays put:** the app serves itself on a fixed local port (7028, or the next free one), so the logs saved in it are there next time. Nothing leaves the machine.
 
 Run it from source with `npm run build`, then `cd desktop && npm install && npm start`.
+
+## Per-motor use
+
+The **Channels** group on the Graphs page is the power distribution board's currents, and it comes from the **Driver Station log only**: the DS records them when the robot's code reads the PDH/PDP (WPILib's `PowerDistribution`) and the board is on the CAN bus. If your code does not, there is nothing to show there (the page says so). Attaching a robot log does not feed that group.
+
+Per-motor use comes from the robot logs instead. Every numeric signal of an attached roboRIO log or converted Phoenix log is put on the match's timeline, so it lines up with the auto/teleop bands, the Driver Station's own signals and its error markers:
+
+- **Motors** (Graphs): the signals that are motor currents (`…/StatorCurrent`, `…/SupplyCurrent`, `…/OutputCurrent`, and power channel arrays such as `PowerDistribution/ChannelCurrent[3]`, which AdvantageKit-style logging writes) as heat strips on one shared scale, busiest first. Open a row for its chart. Motors that never drew a full amp are folded into **Idle**. Limits and settings (`StatorCurrentLimit`) are not mistaken for use.
+- **Robot logs** (Graphs, below): every other signal, grouped by device and folded.
+- **How a log gets on the timeline:** the roboRIO log by the usual evidence (messages, enabled periods, clock). A Phoenix log has none of those, so it is lined up with the roboRIO log **of the same boot** (they began within 90 s of each other and ran about as long), which is good to a second or two and says so on its Info card. A log that cannot be lined up is named on the Graphs page with the reason, and its signals stay on the Info page.
+- A robot log bigger than 400 MB is not put on the graphs (it is listed on the Info page).
+- If the motors you expect are missing, press **Copy diagnostics** on the Info page: it lists what was taken for a motor current and the names of every signal, so the detection can be fixed from the names.
 
 ## Events
 

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { analyze } from '../src/lib/analysis';
-import { diagnosticsText, robotLogDiagnostics } from '../src/lib/diagnostics';
+import { diagnosticsText, robotGraphLines, robotLogDiagnostics } from '../src/lib/diagnostics';
 import { describeExtra } from '../src/lib/extras';
 import { parseDSEvents } from '../src/lib/dsevents';
 import { parseDSLog } from '../src/lib/dslog';
@@ -18,7 +18,7 @@ describe('diagnosticsText', () => {
   const entry: LogEntry = { key: 'k', source: 'sample', startTime: log.startTime, dslog: ref('a.dslog', 10), dsevents: ref('a.dsevents', 20) };
 
   it('says how the power distribution data was read', () => {
-    const text = diagnosticsText(entry, { log, events, analysis: analyze(log, events), extras: [], warnings: [] });
+    const text = diagnosticsText(entry, { log, events, analysis: analyze(log, events), extras: [], robot: [], warnings: [] });
     expect(text).toMatch(/power distribution: rev · CAN id 1 · records by type byte \{.*"33":\d+/);
     expect(text).toMatch(/channels at 1 A or more at some point: 23 of 24/);
     expect(text).toMatch(/connected to the robot: \d+\.\d% of records/);
@@ -29,7 +29,7 @@ describe('diagnosticsText', () => {
   });
 
   it('copes with a log that has no .dslog', () => {
-    const text = diagnosticsText(entry, { log: null, events, analysis: analyze(null, events), extras: [], warnings: [] });
+    const text = diagnosticsText(entry, { log: null, events, analysis: analyze(null, events), extras: [], robot: [], warnings: [] });
     expect(text).toContain('.dslog: none');
     expect(text).toContain('.dsevents:');
   });
@@ -89,5 +89,39 @@ describe('robotLogDiagnostics', () => {
     expect(text).toMatch(/500 signals .*first 400/);
     expect(text).toContain('s399 | double | 0');
     expect(text).not.toContain('s400 | double');
+  });
+});
+
+describe('robotGraphLines', () => {
+  const arr = (...v: number[]) => Float32Array.from(v);
+  const parsed = (over: object) => ({ log: null, events: null, analysis: {}, extras: [], robot: [], warnings: [], ...over }) as unknown as Parameters<typeof robotGraphLines>[0];
+
+  it('says what was taken for motor currents and their peaks, biggest first, so a miss can be spotted from the names', () => {
+    const lines = robotGraphLines(
+      parsed({
+        robot: [
+          { log: 'a', name: 'Phoenix6/TalonFX-1/StatorCurrent', group: 'Phoenix6/TalonFX-1', short: 'StatorCurrent', kind: 'current', label: 'TalonFX 1 · Stator', arr: arr(5, 80, NaN) },
+          { log: 'a', name: 'Phoenix6/TalonFX-2/StatorCurrent', group: 'Phoenix6/TalonFX-2', short: 'StatorCurrent', kind: 'current', label: 'TalonFX 2 · Stator', arr: arr(5, 120) },
+          { log: 'a', name: 'Phoenix6/TalonFX-2/Position', group: 'Phoenix6/TalonFX-2', short: 'Position', kind: 'other', arr: arr(1, 2) },
+        ],
+      }),
+    );
+    expect(lines[0]).toBe('robot signals on the graphs: 3 · 2 taken for motor currents');
+    expect(lines[1]).toBe('  TalonFX 2 · Stator | Phoenix6/TalonFX-2/StatorCurrent | peak 120.0 A');
+    expect(lines[2]).toContain('TalonFX 1 · Stator');
+    expect(lines).toHaveLength(3);
+  });
+
+  it('names the robot logs that are not on the graphs and why', () => {
+    const lines = robotGraphLines(
+      parsed({
+        extras: [
+          { name: 'rio.hoot.wpilog', ok: true, decoded: true, alignment: { confidence: 'none', detail: 'no shared messages, enabled periods or clock to go by', offset: 0, tried: {} } },
+          { name: 'ok.wpilog', ok: true, decoded: true, alignment: { confidence: 'high', detail: '', offset: 3, tried: {} } },
+          { name: 'kept.hoot', ok: true, decoded: false },
+        ],
+      }),
+    );
+    expect(lines).toEqual(['robot signals on the graphs: 0', 'not on the graphs: rio.hoot.wpilog: no shared messages, enabled periods or clock to go by']);
   });
 });

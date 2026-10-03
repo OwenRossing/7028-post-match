@@ -5,6 +5,7 @@ import type { DSEvent, EventKind } from '../../lib/dsevents';
 import type { DSLog } from '../../lib/dslog';
 import { chartsToPng, download, safeFileName } from '../../lib/export';
 import { channelName, updateSettings, type TimeMode } from '../../lib/settings';
+import type { RobotSignal } from '../../lib/robotSeries';
 import { channelColor } from '../../lib/theme';
 import { Icon } from '../Icon';
 import { Navigator, TimelineLegend } from '../Navigator';
@@ -29,7 +30,7 @@ export const CHART_SIGNALS: Record<ChartId, string[]> = {
   channels: ['channels'],
 };
 
-type Section = 'Power' | 'Network' | 'RIO';
+type Section = 'Power' | 'Motors' | 'Network' | 'RIO' | 'Robot';
 
 interface Signal {
   id: string;
@@ -47,6 +48,10 @@ interface Signal {
   axis: AxisSpec;
   thresholds?: Threshold[];
   help: string;
+  /** Drawn as a heat strip, like the power channels (motor currents). */
+  heat?: boolean;
+  /** For a robot signal: the device it belongs to. */
+  group?: string;
 }
 
 const STAT_WORD = { min: 'lowest', max: 'peak', avg: 'avg' } as const;
@@ -71,6 +76,61 @@ function statIn(log: DSLog, arr: Float32Array, range: Span, kind: Signal['stat']
 }
 
 const chId = (ch: number) => `ch${ch}`;
+const rgId = (group: string) => `rg:${group}`;
+const IDLE_ID = 'mi';
+/** The sections in the order they are drawn. */
+const SECTIONS: Section[] = ['Power', 'Motors', 'Network', 'RIO', 'Robot'];
+
+const peakOf = (a: Float32Array) => {
+  let p = -Infinity;
+  for (let i = 0; i < a.length; i++) if (a[i] > p) p = a[i];
+  return p;
+};
+const plain = (v: number) => String(Math.round(v * 100) / 100);
+
+/** The robot logs' signals as rows: motor currents as heat rows, everything else grouped by device. */
+function robotRows(robot: RobotSignal[], dark: boolean): Signal[] {
+  return robot.map((s, i) =>
+    s.kind === 'current'
+      ? {
+          id: `m:${i}`,
+          section: 'Motors' as const,
+          name: s.label ?? s.name,
+          arr: s.arr,
+          color: channelColor(i, dark),
+          unit: 'A',
+          digits: 0,
+          stat: 'max' as const,
+          lo: 0,
+          heat: true,
+          group: s.group,
+          axis: { scale: 'y', fmt: (v: number) => `${v}A`, range: (min?: number | null, max?: number | null) => [Math.min(0, min ?? 0), Math.max((max ?? 5) * 1.08, 5)] as [number, number] },
+          help: `${s.name}, from ${s.log}`,
+        }
+      : {
+          id: `r:${i}`,
+          section: 'Robot' as const,
+          name: s.short,
+          arr: s.arr,
+          color: channelColor(i % 24, dark),
+          unit: '',
+          digits: 2,
+          stat: 'avg' as const,
+          group: s.group,
+          axis: {
+            scale: 'y',
+            fmt: plain,
+            range: (min?: number | null, max?: number | null) => {
+              const lo = min ?? 0;
+              const hi = max ?? 1;
+              const pad = (hi - lo) * 0.08 || 1;
+              return [lo - pad, hi + pad] as [number, number];
+            },
+          },
+          help: `${s.name}, from ${s.log}`,
+        },
+  );
+}
 
 /**
  * Graphs: every signal as one folded row with a strip of the visible range. Space or Enter unfolds the full
@@ -217,8 +277,26 @@ export function Graphs({
         help: 'roboRIO CAN bus utilization.',
       },
     );
-    return list;
-  }, [log, theme]);
+    return [...list, ...robotRows(parsed.robot ?? [], theme.dark)];
+  }, [log, theme, parsed.robot]);
+
+  // Motors, busiest first; the heat strips share one scale so they can be compared.
+  const motors = useMemo(() => signals.filter((s) => s.section === 'Motors').sort((a, b) => peakOf(b.arr) - peakOf(a.arr)), [signals]);
+  // Motors that never drew a full amp are folded away, so the list is the ones that did something.
+  const motorsActive = useMemo(() => motors.filter((s) => peakOf(s.arr) >= 1), [motors]);
+  const motorsIdle = useMemo(() => motors.filter((s) => !(peakOf(s.arr) >= 1)), [motors]);
+  const motorPeak = useMemo(() => Math.max(1, ...motors.map((s) => peakOf(s.arr)).filter(Number.isFinite)), [motors]);
+  // The rest of the robot's signals, by device. Only the open groups draw their rows.
+  const robotGroups = useMemo(() => {
+    const out = new Map<string, Signal[]>();
+    for (const s of signals) if (s.section === 'Robot') out.set(s.group ?? 'Other', [...(out.get(s.group ?? 'Other') ?? []), s]);
+    return [...out];
+  }, [signals]);
+  // Robot logs that are attached but are not on the graphs, and why.
+  const unplaced = useMemo(
+    () => parsed.extras.filter((x) => x.ok && x.decoded !== false && (!x.alignment || (x.alignment.confidence !== 'high' && x.alignment.confidence !== 'medium'))),
+    [parsed.extras],
+  );
 
   // Converted lazily, only for charts that are open.
   const nullable = useRef<{ log: DSLog | null; map: Map<Float32Array, (number | null)[]> }>({ log: null, map: new Map() });
@@ -243,20 +321,36 @@ export function Graphs({
   // Rows in screen order, for the keyboard.
   const order = useMemo(() => {
     const ids: string[] = [];
-    for (const s of signals) {
-      ids.push(s.id);
-      if (s.id === 'total' && log?.channelCount) {
-        ids.push('channels');
-        if (isOpen('channels')) for (let ch = 0; ch < log.channelCount; ch++) ids.push(chId(ch));
+    for (const sec of SECTIONS) {
+      if (sec === 'Motors') {
+        ids.push(...motorsActive.map((s) => s.id));
+        if (motorsIdle.length) {
+          ids.push(IDLE_ID);
+          if (isOpen(IDLE_ID)) ids.push(...motorsIdle.map((s) => s.id));
+        }
       }
+      else if (sec === 'Robot')
+        for (const [g, rows] of robotGroups) {
+          ids.push(rgId(g));
+          if (isOpen(rgId(g))) ids.push(...rows.map((s) => s.id));
+        }
+      else
+        for (const s of signals) {
+          if (s.section !== sec) continue;
+          ids.push(s.id);
+          if (s.id === 'total' && log?.channelCount) {
+            ids.push('channels');
+            if (isOpen('channels')) for (let ch = 0; ch < log.channelCount; ch++) ids.push(chId(ch));
+          }
+        }
     }
     return ids;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [signals, open, log]);
+  }, [signals, motorsActive, motorsIdle, robotGroups, open, log]);
   const cur = sel && order.includes(sel) ? sel : sel?.startsWith('ch') ? 'channels' : order[0];
 
   useEffect(() => {
-    rootRef.current?.querySelector(`[data-sig="${cur}"]`)?.scrollIntoView({ block: 'nearest' });
+    rootRef.current?.querySelector(`[data-sig="${String(cur).replace(/["\\]/g, '\\$&')}"]`)?.scrollIntoView({ block: 'nearest' });
   }, [cur]);
 
   const onKey = useRef<(e: KeyboardEvent) => void>(() => undefined);
@@ -278,7 +372,7 @@ export function Graphs({
         toggle(cur);
         break;
       case 'e': {
-        const tops = order.filter((id) => !id.startsWith('ch') || id === 'channels');
+        const tops = order.filter((id) => (!id.startsWith('ch') || id === 'channels') && !id.startsWith('rg:') && !id.startsWith('r:') && id !== IDLE_ID);
         const anyClosed = tops.some((id) => !isOpen(id));
         setOpen((o) => (anyClosed ? [...new Set([...o, ...tops])] : []));
         break;
@@ -310,7 +404,7 @@ export function Graphs({
 
   const zoomTo = (start: number, end: number) => group.setRange(start - 2, end + 2);
   const match = analysis.match;
-  const rev = `${ctx.entry.key}|${log?.count}|${tf.mode}|${tf.base}|${theme.dark}|${labels?.join(',')}`;
+  const rev = `${ctx.entry.key}|${log?.count}|${parsed.robot?.length ?? 0}|${tf.mode}|${tf.base}|${theme.dark}|${labels?.join(',')}`;
 
   const exportPng = async () => {
     const plots = [...group.plots].sort((a: uPlot, b: uPlot) =>
@@ -356,12 +450,12 @@ export function Graphs({
     </div>
   );
 
-  const signalRow = (s: Signal) => {
+  const signalRow = (s: Signal, child = false) => {
     const v = statIn(log, s.arr, range, s.stat);
     const on = isOpen(s.id);
     return (
       <div key={s.id} className={`g-item ${on ? 'open' : ''}`} id={`sig-${s.id}`}>
-        <div className={`g-row ${cur === s.id ? 'sel' : ''}`} data-sig={s.id} onClick={() => (setSel(s.id), toggle(s.id))} title={s.help}>
+        <div className={`g-row ${child ? 'child' : ''} ${cur === s.id ? 'sel' : ''}`} data-sig={s.id} onClick={() => (setSel(s.id), toggle(s.id))} title={s.help}>
           <Chevron open={on} />
           <span className="g-name">
             <i className="g-swatch" style={{ background: s.color }} />
@@ -372,9 +466,35 @@ export function Graphs({
             {Number.isFinite(v) ? v.toFixed(s.digits) : '–'}
             <small>{s.unit}</small>
           </span>
-          <Strip ctx={ctx} log={log} arr={s.arr} range={range} mode="line" color={s.color} lo={s.lo} hi={s.hi} low={s.low} theme={theme} />
+          <Strip
+            ctx={ctx}
+            log={log}
+            arr={s.arr}
+            range={range}
+            mode={s.heat ? 'heat' : 'line'}
+            color={s.heat ? '' : s.color}
+            lo={s.lo}
+            hi={s.heat ? motorPeak : s.hi}
+            low={s.low}
+            theme={theme}
+          />
         </div>
         {on && chart(s.id, s.name, s.arr, s.color, s.unit, s.digits, s.axis, s.thresholds)}
+      </div>
+    );
+  };
+
+  const groupRow = (id: string, label: string, rows: Signal[]) => {
+    const on = isOpen(id);
+    return (
+      <div key={id} className={`g-item group ${on ? 'open' : ''}`} id={`sig-${id}`}>
+        <div className={`g-row ${cur === id ? 'sel' : ''}`} data-sig={id} onClick={() => (setSel(id), toggle(id))}>
+          <Chevron open={on} />
+          <span className="g-name">
+            {label} <span className="g-count">{rows.length}</span>
+          </span>
+        </div>
+        {on && <div className="g-children">{rows.map((s) => signalRow(s, true))}</div>}
       </div>
     );
   };
@@ -401,6 +521,9 @@ export function Graphs({
         </div>
         {on && (
           <div className="g-children">
+            {used === 0 && (
+              <p className="g-note">Every channel stayed under 1 A in this log, so none is drawn as used: the robot was probably not driven (disabled, on blocks, or a pit check).</p>
+            )}
             {log.currents.map((arr, ch) => {
               const id = chId(ch);
               const chOpen = isOpen(id);
@@ -463,8 +586,6 @@ export function Graphs({
       </div>
     );
   };
-
-  const sections: Section[] = ['Power', 'Network', 'RIO'];
 
   return (
     <div className="page graphs-page" ref={rootRef}>
@@ -581,13 +702,45 @@ export function Graphs({
 
       <div className={`graphs ${settings.eventsPanelOpen && parsed.events ? '' : 'no-panel'}`}>
         <div className="g-list">
-          {sections.map((sec) => {
+          {SECTIONS.map((sec) => {
+            if (sec === 'Motors')
+              return motors.length ? (
+                <section key={sec} className="g-sec">
+                  <h2>Motors</h2>
+                  {motorsActive.map((s) => signalRow(s))}
+                  {motorsIdle.length > 0 && groupRow(IDLE_ID, 'Idle: never above 1 A', motorsIdle)}
+                  {!motorsActive.length && <p className="g-note">None of the motors or channels in the robot logs drew a full amp: the robot was probably not driven.</p>}
+                  <p className="g-note">
+                    Motor and power channel currents from the attached robot logs, busiest first, on one scale so they can be compared. Open a row for its chart; the
+                    Info page says how each log lined up with the match.
+                  </p>
+                </section>
+              ) : null;
+            if (sec === 'Robot')
+              return robotGroups.length || unplaced.length ? (
+                <section key={sec} className="g-sec">
+                  <h2>Robot logs</h2>
+                  {robotGroups.map(([g, rows]) => groupRow(rgId(g), g, rows))}
+                  {unplaced.map((x) => (
+                    <p key={x.name} className="g-note">
+                      <b>{x.name}</b> is not on the graphs: {x.alignment?.detail ?? "there is nothing to line it up with the match by."} Its signals are listed on the Info page.
+                    </p>
+                  ))}
+                </section>
+              ) : null;
             const rows = signals.filter((s) => s.section === sec);
             if (!rows.length) return null;
             return (
               <section key={sec} className="g-sec">
                 <h2>{sec}</h2>
                 {rows.map((s) => [signalRow(s), s.id === 'total' && log.channelCount ? channelsGroup() : null])}
+                {sec === 'Power' && !log.channelCount && (
+                  <p className="g-note">
+                    No power distribution data in this Driver Station log, so there are no per-channel currents here. The Driver Station only records them when the robot's
+                    code is reading the power distribution board (WPILib's PowerDistribution class) and the board is on the CAN bus.{' '}
+                    {motors.length ? 'The attached robot logs have motor currents of their own, under Motors.' : "Attach the robot's .wpilog, or a converted .hoot, to see motor currents from it."}
+                  </p>
+                )}
               </section>
             );
           })}

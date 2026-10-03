@@ -4,6 +4,7 @@ import type { DSLog } from './dslog';
 import type { ExtraInfo } from './extras';
 import type { HootProbe } from './hoot';
 import type { ExtraKind } from './library';
+import type { RobotSignal } from './robotSeries';
 
 export interface ParsedLog {
   log: DSLog | null;
@@ -11,6 +12,8 @@ export interface ParsedLog {
   analysis: Analysis;
   /** What each attached log holds and how it lines up, in the order they were attached. */
   extras: ExtraInfo[];
+  /** Signals of the attached robot logs on the Driver Station log's grid, for the logs that line up with it. */
+  robot: RobotSignal[];
   warnings: string[];
 }
 

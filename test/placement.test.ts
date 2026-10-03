@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { identityFit, placeLog, planPlacements, type Candidate, type KnownLog, type RioAnchors } from '../src/lib/aggregate';
+import { alignToSibling, identityFit, placeLog, planPlacements, type Alignment, type Candidate, type KnownLog, type RioAnchors } from '../src/lib/aggregate';
+import { linkBoots, type ExtraInfo } from '../src/lib/extras';
 import type { MatchId } from '../src/lib/wpilog';
 
 // These are the rules that keep a pool of many events clean: what a name, a clock and a shape can each settle alone.
@@ -146,5 +147,88 @@ describe('the log of the same boot', () => {
   it('respects what was taken off by hand and what is already there', () => {
     const moves = planPlacements([rioLog, hoot()], [m1, m2, m3], (n, k) => n === 'MNST_Q11_rio.hoot' && k === 'm1', (n, k) => n === 'MNST_Q11_rio.hoot' && k === 'm3');
     expect(moves.filter((m) => m.name === 'MNST_Q11_rio.hoot').map((m) => m.key)).toEqual(['m2']);
+  });
+});
+
+describe('lining a log up by the log of the same boot', () => {
+  const T0 = 1_780_000_000;
+  const w = rio({ start: T0, length: 2000, stamp: T0 + 2 }); // the roboRIO log, with a wall clock
+  const phoenix = (over: Partial<RioAnchors> = {}): RioAnchors => ({ first: 0, last: 2001, enabled: [], lines: [], ids: [], stamp: T0 + 9, ...over });
+
+  it('puts it where the two began in relation to each other, on the match timeline', () => {
+    // the roboRIO log's time 0 is 100 s into the match; its clock says it began at T0, and the Phoenix log's name says T0 + 9
+    const al = alignToSibling(phoenix(), w, 100, 'FRC.wpilog')!;
+    expect(al.method).toBe('boot');
+    expect(al.confidence).toBe('medium');
+    expect(al.offset).toBeCloseTo(109, 6); // the clock is used over the roboRIO log's own file name (T0 + 2) because it is exact
+    expect(al.detail).toMatch(/FRC\.wpilog, the log of the same boot/);
+    // a roboRIO log with no clock of its own is read by its file name
+    expect(alignToSibling(phoenix(), rio({ clock: false, length: 2000, stamp: T0 }), 100, 'x')!.offset).toBeCloseTo(109, 6);
+  });
+
+  it('allows for where each log started counting', () => {
+    // the roboRIO log's own clock starts at 5 s; the Phoenix log's at 3 s
+    const al = alignToSibling(phoenix({ first: 3, last: 2004 }), { ...w, first: 5, last: 2005, clockOffset: T0 - 5 }, 100, 'x')!;
+    // the roboRIO record at 5 s is at T0, its DS time 105; the Phoenix first record is 9 s after T0 - 0
+    expect(al.offset).toBeCloseTo(5 + 100 + (T0 + 9 - T0) - 3, 6);
+  });
+
+  it('says nothing when the logs did not begin together, did not run as long, or are on another clock', () => {
+    expect(alignToSibling(phoenix({ stamp: T0 + 500 }), w, 100, 'x')).toBeNull();
+    expect(alignToSibling(phoenix({ stamp: T0 + 6 * 3600 }), w, 100, 'x')).toBeNull(); // a time zone: hours apart
+    expect(alignToSibling(phoenix({ last: 900 }), w, 100, 'x')).toBeNull();
+    expect(alignToSibling(phoenix({ stamp: undefined }), w, 100, 'x')).toBeNull();
+    expect(alignToSibling(phoenix({ last: 10 }), w, 100, 'x')).toBeNull(); // too short to tell
+  });
+});
+
+describe('linking the logs of a match by boot', () => {
+  const T0 = 1_780_000_000;
+  const info = (name: string, anchors: RioAnchors, alignment?: Alignment, over: Partial<ExtraInfo> = {}): ExtraInfo => ({ name, kind: 'wpilog', size: 1, ok: true, decoded: true, anchors, alignment, ...over });
+  const good: Alignment = { method: 'clock', offset: 100, confidence: 'medium', detail: '', tried: {} };
+  const none: Alignment = { offset: 0, confidence: 'none', detail: '', tried: {} };
+  const rioInfo = () => info('FRC.wpilog', rio({ start: T0, length: 2000, stamp: T0 + 2 }), good);
+  const hootAnchors: RioAnchors = { first: 0, last: 2001, enabled: [], lines: [], ids: [], stamp: T0 + 9 };
+
+  it('lines up a log that could not be by the one that was', () => {
+    const hoot = info('rio.hoot', hootAnchors, none);
+    linkBoots([rioInfo(), hoot]);
+    expect(hoot.alignment).toMatchObject({ method: 'boot', confidence: 'medium' });
+    expect(hoot.alignment!.offset).toBeCloseTo(109, 6);
+  });
+
+  it('also takes a log with no alignment at all', () => {
+    const hoot = info('rio.hoot', hootAnchors, undefined);
+    linkBoots([rioInfo(), hoot]);
+    expect(hoot.alignment?.method).toBe('boot');
+  });
+
+  it('leaves alone a log that already lines up, one that is not readable, and one that is only kept', () => {
+    const own = info('b.wpilog', { ...hootAnchors }, { ...good, offset: 55 });
+    const kept = info('k.hoot', hootAnchors, undefined, { decoded: false });
+    linkBoots([rioInfo(), own, kept]);
+    expect(own.alignment!.offset).toBe(55);
+    expect(kept.alignment).toBeUndefined();
+  });
+
+  it('does not guess between two logs that both look like the boot', () => {
+    const twin = info('FRC-2.wpilog', rio({ start: T0 + 30, length: 2000, stamp: T0 + 31 }), { ...good, offset: 130 });
+    const hoot = info('rio.hoot', hootAnchors, none);
+    linkBoots([rioInfo(), twin, hoot]);
+    expect(hoot.alignment).toBe(none);
+  });
+
+  it('anchors every Phoenix log of the boot on the roboRIO log, never on each other', () => {
+    const first = info('rio.hoot', hootAnchors, none);
+    const second = info('rio2.hoot', { ...hootAnchors, stamp: T0 + 12 }, none);
+    linkBoots([rioInfo(), first, second]);
+    expect(first.alignment?.offset).toBeCloseTo(109, 6);
+    expect(second.alignment?.offset).toBeCloseTo(112, 6); // each by its own start
+    // with no roboRIO log to go by, two Phoenix logs line up with nothing
+    const a = info('a.hoot', hootAnchors, none);
+    const b = info('b.hoot', { ...hootAnchors, stamp: T0 + 12 }, none);
+    linkBoots([a, b]);
+    expect(a.alignment).toBe(none);
+    expect(b.alignment).toBe(none);
   });
 });

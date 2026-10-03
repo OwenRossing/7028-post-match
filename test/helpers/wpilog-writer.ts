@@ -79,6 +79,13 @@ export class WPILogWriter {
     this.record(id, ts, [...enc.encode(s)]);
   }
 
+  /** A double[] record. */
+  doubles(id: number, ts: number, values: number[]) {
+    const b = new DataView(new ArrayBuffer(8 * values.length));
+    values.forEach((v, i) => b.setFloat64(i * 8, v, true));
+    this.record(id, ts, [...new Uint8Array(b.buffer)]);
+  }
+
   raw(id: number, ts: number, bytes: number[]) {
     this.record(id, ts, bytes);
   }

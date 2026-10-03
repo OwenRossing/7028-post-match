@@ -1,6 +1,6 @@
 // Reading the logs attached to a match: what each one is, what it holds and how it lines up with the DS log.
 
-import { alignAnchors, clockSpan, rioAnchors, type Alignment, type DsAnchor, type RioAnchors } from './aggregate';
+import { alignAnchors, alignToSibling, clockSpan, rioAnchors, type Alignment, type DsAnchor, type RioAnchors } from './aggregate';
 import { probeHoot, type HootProbe } from './hoot';
 import type { ExtraKind } from './library';
 import { fileStamp, isWPILog, keepAnchors, parseWPILog, type WPILog, type WPILogKind } from './wpilog';
@@ -113,5 +113,21 @@ export function describeExtra(name: string, kind: ExtraKind, bytes: ArrayBuffer,
     return describe(name, kind, size, parseWPILog(u8, { keep: keepAnchors }), ds, note);
   } catch (err) {
     return { name, kind, size, ok: false, error: String((err as Error).message ?? err) };
+  }
+}
+
+/**
+ * Lines up the logs of a match that could not be lined up by themselves with the log of the same boot, when there is exactly
+ * one that is (see `alignToSibling`). Changes the infos in place.
+ */
+export function linkBoots(infos: ExtraInfo[]): void {
+  const good = infos.filter((x) => x.ok && x.anchors && x.alignment && x.alignment.method !== 'boot' && (x.alignment.confidence === 'high' || x.alignment.confidence === 'medium'));
+  for (const x of infos) {
+    if (!x.ok || !x.anchors || x.decoded === false || (x.alignment && x.alignment.confidence !== 'none')) continue;
+    const found = good.filter((w) => w !== x).flatMap((w) => {
+      const al = alignToSibling(x.anchors!, w.anchors!, w.alignment!.offset, w.name);
+      return al ? [al] : [];
+    });
+    if (found.length === 1) x.alignment = found[0]; // two logs that both look like the same boot: not safe to say which
   }
 }

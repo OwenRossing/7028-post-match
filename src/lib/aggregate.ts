@@ -12,7 +12,7 @@ import type { DSLog } from './dslog';
 import { hootName } from './hoot';
 import { clockOffset, consoleLines, enabledWindows, fileStamp, matchIds, matchLabel, sameMatch, type MatchId, type WPILog } from './wpilog';
 
-export type AlignMethod = 'messages' | 'enabled' | 'clock';
+export type AlignMethod = 'messages' | 'enabled' | 'clock' | 'boot';
 export type Confidence = 'high' | 'medium' | 'low' | 'none';
 
 export interface Alignment {
@@ -65,8 +65,9 @@ const MIN_MESSAGE = 12;
 const WINDOW = 0.3;
 const MAX_LINES = 1500;
 const RANK: Record<Confidence, number> = { none: 0, low: 1, medium: 2, high: 3 };
-const PRIORITY: Record<AlignMethod, number> = { messages: 3, enabled: 2, clock: 1 };
+const PRIORITY: Record<AlignMethod, number> = { messages: 3, enabled: 2, clock: 1, boot: 0 };
 const LABEL: Record<AlignMethod, string> = {
+  boot: 'the log of the same boot',
   messages: 'shared console messages',
   enabled: 'the enabled periods',
   clock: "the roboRIO's clock",
@@ -307,6 +308,30 @@ export function alignWPILog(w: WPILog, ds: DsAnchor): Alignment {
 export function clockSpan(w: WPILog): Span | undefined {
   const off = clockOffset(w);
   return off == null ? undefined : { start: w.first + off, end: w.last + off };
+}
+
+/**
+ * Lines up a log that has nothing to line up by (a Phoenix log has no wall clock, console or enabled periods) using the log
+ * of the same boot, which is already lined up: the two began together, so the time between their start (what the file names
+ * say, or the roboRIO log's clock) is the time between them on the match. Good to a second or two, the resolution of a file
+ * name, so it is only offered when the two began within 90 s and ran for about as long, which also rules out a different
+ * clock (a time zone would put them hours apart).
+ */
+export function alignToSibling(h: RioAnchors, w: RioAnchors, offsetOfW: number, nameOfW: string): Alignment | null {
+  const wWall = w.clockOffset != null ? w.clockOffset + w.first : w.stamp;
+  if (h.stamp == null || wWall == null) return null;
+  const apart = h.stamp - wWall;
+  const dh = h.last - h.first;
+  const dw = w.last - w.first;
+  if (dh < 30 || Math.abs(apart) > 90 || Math.abs(dh - dw) > Math.max(10, 0.05 * dw)) return null;
+  const offset = w.first + offsetOfW + apart - h.first;
+  return {
+    method: 'boot',
+    offset,
+    confidence: 'medium',
+    tried: {},
+    detail: `Lined up with ${nameOfW}, the log of the same boot (they began ${Math.abs(apart).toFixed(0)} s apart and ran as long). Good to a second or two.`,
+  };
 }
 
 // ---------- Which match does a log belong to? ----------
