@@ -9,6 +9,10 @@ contextBridge.exposeInMainWorld('pitviewDesktop', {
   locateOwlet: () => ipcRenderer.invoke('pitview:owlet'),
   openFolder: (kind) => ipcRenderer.invoke('pitview:open', kind),
   retryConversions: () => ipcRenderer.invoke('pitview:retry'),
+  // Opens CTRE's Owlet download page. The address is fixed in the app.
+  getOwlet: () => ipcRenderer.invoke('pitview:getOwlet'),
+  // Offers the Owlet found in Downloads: the app asks the user in its own dialog before using it. Takes no path.
+  useDownloadedOwlet: (ask) => ipcRenderer.invoke('pitview:useOwlet', ask === 'once' ? 'once' : 'menu'),
   // Takes the dropped or picked File objects themselves, never paths: only a real file the user chose has one.
   addRobotFiles: (files) => {
     const paths = [];

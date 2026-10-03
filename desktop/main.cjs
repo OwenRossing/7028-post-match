@@ -9,6 +9,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { copyIntoRobotFolder } = require('./robotfiles.cjs');
+const { findOwletIn, owletZipIn } = require('./owletfind.cjs');
 
 // Tests (and portable installs) can keep everything in one folder.
 if (process.env.PITVIEW_USER_DATA) app.setPath('userData', process.env.PITVIEW_USER_DATA);
@@ -53,6 +54,22 @@ function owletCandidates() {
   return dirs.map((d) => path.join(d, OWLET));
 }
 
+/** CTRE's page for the Owlet download. Fixed here: the page cannot choose what the app opens. */
+const OWLET_PAGE = 'https://docs.ctr-electronics.com/cli-tools';
+const downloadsDir = () => process.env.PITVIEW_DOWNLOADS || app.getPath('downloads');
+const declined = new Set(); // suggested Owlets the user said no to: not asked about again by itself
+
+// Looked for at most every few seconds: the menu and a dropped hoot both ask.
+let lookedAt = 0;
+let lookedFor = { found: null, zip: null };
+function downloaded() {
+  if (Date.now() - lookedAt > 3000) {
+    lookedAt = Date.now();
+    lookedFor = { found: findOwletIn(downloadsDir()), zip: owletZipIn(downloadsDir()) };
+  }
+  return lookedFor;
+}
+
 async function startEngine() {
   const { startCompanion } = await import(pathToFileURL(path.join(APP, 'server', 'companion.mjs')).href);
   fs.mkdirSync(settings.robotDir, { recursive: true });
@@ -79,7 +96,15 @@ async function startEngine() {
 
 const view = () => {
   const owlet = engine.robot.owletPath();
-  return { dsDir: settings.dsDir, robotDir: settings.robotDir, owlet: { path: owlet, found: !!owlet }, platform: process.platform, version: app.getVersion() };
+  const d = owlet ? { found: null, zip: null } : downloaded();
+  return {
+    dsDir: settings.dsDir,
+    robotDir: settings.robotDir,
+    // `suggested` is an Owlet found in Downloads, not yet used; `hint` says an unzipped download is needed
+    owlet: { path: owlet, found: !!owlet, suggested: d.found || undefined, hint: !d.found && d.zip ? `${d.zip} is in your Downloads folder: unzip it, then open this menu again.` : undefined },
+    platform: process.platform,
+    version: app.getVersion(),
+  };
 };
 
 /** Only the page this app serves may use the bridge. */
@@ -128,6 +153,32 @@ function registerIpc() {
       engine.configure({ owlet: settings.owlet });
     }
     return view();
+  });
+
+  // Use the Owlet found in Downloads, once the user has said yes to this exact file in a dialog of the app's own.
+  ipcMain.handle('pitview:useOwlet', async (e, ask) => {
+    if (!trusted(e) || engine.robot.owletPath()) return view();
+    const found = downloaded().found; // the app finds it; the page names nothing
+    if (!found || (ask === 'once' && declined.has(found))) return view();
+    const r = await dialog.showMessageBox(win, {
+      type: 'question',
+      buttons: ['Use this Owlet', 'Not now'],
+      defaultId: 0,
+      cancelId: 1,
+      title: 'Use this as Owlet?',
+      message: 'PitView found a program called Owlet in your Downloads folder.',
+      detail: `${found}\n\nPitView will run it to turn your .hoot files into .wpilog files. Only choose Use if you downloaded it from CTRE.`,
+    });
+    if (r.response === 0) {
+      settings.owlet = found;
+      saveSettings();
+      engine.configure({ owlet: found });
+    } else declined.add(found);
+    return view();
+  });
+
+  ipcMain.handle('pitview:getOwlet', async (e) => {
+    if (trusted(e)) await shell.openExternal(OWLET_PAGE);
   });
 
   ipcMain.handle('pitview:open', async (e, kind) => {
@@ -179,7 +230,13 @@ function buildMenu() {
           { role: 'togglefullscreen' },
         ],
       },
-      { label: 'Help', submenu: [{ label: 'PitView on GitHub', click: () => shell.openExternal('https://github.com/OwenRossing/7028-post-match') }] },
+      {
+        label: 'Help',
+        submenu: [
+          { label: 'Get Owlet (CTRE\'s hoot converter)…', click: () => shell.openExternal(OWLET_PAGE) },
+          { label: 'PitView on GitHub', click: () => shell.openExternal('https://github.com/OwenRossing/7028-post-match') },
+        ],
+      },
     ]),
   );
 }

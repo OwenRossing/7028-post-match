@@ -6,7 +6,14 @@ export interface DesktopSettings {
   dsDir: string;
   /** Where the robot's .wpilog / .hoot files are copied to. */
   robotDir: string;
-  owlet: { path: string | null; found: boolean };
+  owlet: {
+    path: string | null;
+    found: boolean;
+    /** An Owlet found in the Downloads folder that has not been used yet: the app asks before it does. */
+    suggested?: string;
+    /** What to do when the download is there but still zipped. */
+    hint?: string;
+  };
   platform: string;
   version: string;
 }
@@ -17,6 +24,13 @@ export interface DesktopBridge {
   chooseFolder(kind: 'ds' | 'robot'): Promise<DesktopSettings>;
   locateOwlet(): Promise<DesktopSettings>;
   openFolder(kind: 'ds' | 'robot'): Promise<void>;
+  /** Opens CTRE's page for downloading Owlet. */
+  getOwlet(): Promise<void>;
+  /**
+   * Offers the Owlet found in Downloads. The app asks the user, naming the file, before using it; `once` does not ask again
+   * about one the user already declined.
+   */
+  useDownloadedOwlet(ask?: 'once' | 'menu'): Promise<DesktopSettings>;
   /** Tries again the hoots Owlet could not convert. */
   retryConversions(): Promise<void>;
   /**

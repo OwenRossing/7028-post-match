@@ -78,7 +78,29 @@ export function DesktopMenu({ bridge, robot, hidden, onShowHidden }: { bridge: D
       </button>
       <div className="menu-note">
         <b>Owlet</b> (turns .hoot into .wpilog): {s ? (s.owlet.found ? <span className="menu-path">{s.owlet.path}</span> : 'not found, so hoots wait') : '…'}
+        {s && !s.owlet.found && s.owlet.suggested && (
+          <>
+            <br />
+            Found in Downloads: <span className="menu-path">{s.owlet.suggested}</span>
+          </>
+        )}
+        {s && !s.owlet.found && !s.owlet.suggested && s.owlet.hint && (
+          <>
+            <br />
+            {s.owlet.hint}
+          </>
+        )}
       </div>
+      {s && !s.owlet.found && s.owlet.suggested && (
+        <button className="item" onClick={() => void bridge.useDownloadedOwlet('menu').then(setS)}>
+          <Icon name="cpu" /> Use the Owlet from Downloads…
+        </button>
+      )}
+      {s && !s.owlet.found && (
+        <button className="item" onClick={() => void bridge.getOwlet()}>
+          <Icon name="external" /> Get Owlet from CTRE…
+        </button>
+      )}
       <button className="item" onClick={() => void bridge.locateOwlet().then(setS)}>
         <Icon name="cpu" /> {s?.owlet.found ? 'Change Owlet…' : 'Locate Owlet…'}
       </button>

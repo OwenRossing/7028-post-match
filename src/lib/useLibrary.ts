@@ -10,6 +10,7 @@ import {
   savedFolder,
   scanFolder,
 } from './folder';
+import { desktopBridge } from './desktop';
 import { idb } from './idb';
 import { planPlacements, robotMatchTitle, type RioAnchors } from './aggregate';
 import type { HootProbe } from './hoot';
@@ -327,7 +328,10 @@ export function useLibrary(opts: {
             else if (i.state === 'failed') optsRef.current.onError(`Owlet couldn't convert ${i.name}`, i.error ?? 'No reason given.');
             else if (i.state === 'needs-owlet' && !robotSeen.current.has('needs-owlet')) {
               robotSeen.current.add('needs-owlet');
-              optsRef.current.onInfo?.('Owlet not found', `${i.name} can't be converted until PitView knows where Owlet is. Use Locate Owlet in the ⋯ menu.`);
+              optsRef.current.onInfo?.(
+                'Owlet not found',
+                `${i.name} can't be converted until PitView knows where Owlet is. ${desktopBridge() ? 'In the ⋯ menu, use Get Owlet to download it, or Locate Owlet.' : 'Use Locate Owlet in the ⋯ menu.'}`,
+              );
             } else continue;
             robotSeen.current.add(sig);
           }

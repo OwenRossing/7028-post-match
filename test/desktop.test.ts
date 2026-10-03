@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
@@ -8,6 +8,13 @@ const require = createRequire(import.meta.url);
 const { copyIntoRobotFolder } = require('../desktop/robotfiles.cjs') as {
   copyIntoRobotFolder(paths: unknown, dir: string): Promise<{ copied: string[]; skipped: string[]; failed: { name: string; error: string }[] }>;
 };
+
+const { findOwletIn, looksRunnable, owletZipIn } = require('../desktop/owletfind.cjs') as {
+  findOwletIn(dir: string, o?: { depth?: number; names?: string[] }): string | null;
+  looksRunnable(file: string, platform?: string): boolean;
+  owletZipIn(dir: string): string | null;
+};
+const OWLET = process.platform === 'win32' ? 'owlet.exe' : 'owlet';
 
 let tmp: string;
 let robot: string;
@@ -92,5 +99,62 @@ describe('the packaged desktop app', () => {
     }
     expect(loaded).toContain('robotfiles.cjs');
     for (const name of loaded) expect(packed(name), `${name} is required by the app but is not packed`).toBe(true);
+  });
+});
+
+describe('finding an Owlet that was just downloaded', () => {
+  // On Windows the finder wants the "MZ" start of a program, so the stand-ins have it.
+  const put = (rel: string, mtime?: number) => {
+    const p = path.join(tmp, 'Downloads', rel);
+    mkdirSync(path.dirname(p), { recursive: true });
+    writeFileSync(p, 'MZ fake program');
+    if (mtime) utimesSync(p, mtime, mtime);
+    return p;
+  };
+  const dl = () => path.join(tmp, 'Downloads');
+
+  it('finds it in Downloads, or in an unzipped folder named for it', () => {
+    const loose = put(OWLET);
+    expect(findOwletIn(dl())).toBe(loose);
+    rmSync(loose);
+    const unzipped = put(path.join('owlet-2026.1.0', 'bin', OWLET));
+    expect(findOwletIn(dl())).toBe(unzipped);
+  });
+
+  it('suggests nothing that merely looks like it, or sits in an unrelated folder', () => {
+    put('owlet-notes.txt');
+    put('owlet.zip');
+    put(`${OWLET}.crdownload`); // a download still in progress
+    put(path.join('Games', 'cheats', OWLET)); // some other folder's program with the same name
+    put(path.join('somebody', 'owlet-ish', 'x', 'y', 'z', 'w', 'v', OWLET)); // buried deeper than an unzipped download would be
+    expect(findOwletIn(dl())).toBeNull();
+    expect(findOwletIn(path.join(tmp, 'no-such-folder'))).toBeNull();
+  });
+
+  it('takes the most recent one when there are two, and reads a depth limit', () => {
+    put(path.join('owlet-old', OWLET), 1_600_000_000);
+    const newer = put(path.join('owlet-new', OWLET), 1_700_000_000);
+    expect(findOwletIn(dl())).toBe(newer);
+    expect(findOwletIn(dl(), { depth: 0 })).toBe(newer); // still one folder in: depth counts below that
+    put(path.join('owlet-deep', 'a', 'b', OWLET), 1_800_000_000);
+    expect(findOwletIn(dl(), { depth: 1 })).toBe(newer); // the deeper, newer one is out of reach
+    expect(findOwletIn(dl(), { depth: 2 })).toBe(path.join(dl(), 'owlet-deep', 'a', 'b', OWLET));
+  });
+
+  it('only suggests something that starts like a program on Windows', () => {
+    const p = path.join(tmp, 'x.exe');
+    writeFileSync(p, 'MZ....');
+    expect(looksRunnable(p, 'win32')).toBe(true);
+    writeFileSync(p, '<html>not a program</html>');
+    expect(looksRunnable(p, 'win32')).toBe(false);
+    expect(looksRunnable(path.join(tmp, 'missing.exe'), 'win32')).toBe(false);
+    expect(looksRunnable(p, 'linux')).toBe(true);
+  });
+
+  it('says when the download is there but still zipped', () => {
+    expect(owletZipIn(dl())).toBeNull();
+    put('Owlet_1.0.zip');
+    put('holiday.zip');
+    expect(owletZipIn(dl())).toBe('Owlet_1.0.zip');
   });
 });

@@ -111,11 +111,14 @@ export default function App() {
           .addRobotFiles(hoots)
           .catch((err) => ({ copied: [], skipped: [], failed: hoots.map((f) => ({ name: f.name, error: String((err as Error).message ?? err) })) }));
         for (const f of r.failed.slice(0, 2)) toast(f.name, f.error, 'error');
-        const owletFound = (await bridge.settings().catch(() => null))?.owlet.found ?? true;
+        let now = await bridge.settings().catch(() => null);
+        // Owlet not set up but one sits in Downloads: the app asks, in its own dialog, whether to use that one
+        if (r.copied.length && now && !now.owlet.found && now.owlet.suggested) now = await bridge.useDownloadedOwlet('once').catch(() => now);
+        const owletFound = now?.owlet.found ?? true;
         if (r.copied.length)
           toast(
             r.copied.length === 1 ? `Copied ${r.copied[0]} to the robot-log folder` : `Copied ${r.copied.length} hoots to the robot-log folder`,
-            `${owletFound ? 'Owlet converts it in the background, and it joins its match by itself.' : "Owlet isn't set up yet: use Locate Owlet in the ⋯ menu and it converts by itself."}${target ? " It is placed by its name and clock, not on the match you picked." : ''}`,
+            `${owletFound ? 'Owlet converts it in the background, and it joins its match by itself.' : "Owlet isn't set up yet. In the ⋯ menu, use Get Owlet to download it from CTRE (or Locate Owlet if you have it), and the hoot converts by itself."}${target ? " It is placed by its name and clock, not on the match you picked." : ''}`,
             'success',
           );
         else if (r.skipped.length && !r.failed.length) toast('Already in the robot-log folder', r.skipped.join(', '), 'info');
