@@ -188,6 +188,10 @@ describe('which match does a robot log belong to', () => {
     expect(rioAnchors(w, 'FRC_20260516_163821_MNST_P3.wpilog').ids[0]).toMatchObject({ type: 'practice', number: 3 });
     expect(rioAnchors(w, 'FRC_20260516_163821.wpilog').ids).toEqual([]);
     expect(rioAnchors(w, 'whatever.wpilog').ids).toEqual([]);
+    expect(rioAnchors(w, 'FRC_TBD_a1b2c3.wpilog').ids).toEqual([]); // before the Driver Station connected
+    // the event part may be missing, and a copied file keeps its name
+    expect(rioAnchors(w, 'FRC_20240315_143022_q1.wpilog').ids).toEqual([{ event: undefined, type: 'qualification', number: 1 }]);
+    expect(rioAnchors(w, 'FRC_20240315_143022_MNST_Q12 (1).wpilog').ids).toEqual([{ event: 'MNST', type: 'qualification', number: 12 }]);
   });
 
   it('names a match that only has robot logs', () => {

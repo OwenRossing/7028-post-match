@@ -278,17 +278,17 @@ export function consoleLines(log: WPILog): WPILogText[] {
 }
 
 /**
- * The robot's wall clock, when the log carries it: DataLogManager writes "systemTime" (int64, microseconds
- * since 1970) once the Driver Station has set the roboRIO's clock. Returns the offset to add to log seconds
- * to get Unix seconds, or undefined.
+ * The robot's wall clock, when the log carries it: DataLogManager writes "systemTime" (int64, microseconds since
+ * 1970, UTC) about every 5 seconds. Returns the offset to add to log seconds to get Unix seconds, or undefined.
+ * The Driver Station sets the roboRIO's clock when it connects, so readings before that can be wrong: the last
+ * reading is the one to trust.
  */
 export function clockOffset(log: WPILog): number | undefined {
   const s = findSeries(log, 'systemTime');
   if (!s || !s.t.length) return undefined;
-  // The first reading after the clock was set; earlier ones can be the roboRIO's unset 1970 clock.
-  for (let i = 0; i < s.t.length; i++) {
+  for (let i = s.t.length - 1; i >= 0; i--) {
     const unix = s.v[i] / 1e6;
-    if (unix > 1.4e9) return unix - s.t[i];
+    if (unix > 1.4e9) return unix - s.t[i]; // anything earlier is the roboRIO's unset clock
   }
   return undefined;
 }
@@ -348,15 +348,22 @@ export function matchIds(log: WPILog): MatchId[] {
 }
 
 /**
- * What a robot log's file name says. DataLogManager names logs FRC_yyyyMMdd_HHmmss and, once the field has told it
- * which match this is, adds _EVENT_q22 (p practice, q qualification, e elimination). The time is the roboRIO's clock,
- * which is UTC unless it was set otherwise.
+ * What a robot log's file name says. DataLogManager names logs FRC_yyyyMMdd_HHmmss (UTC) and, once the field has
+ * told it which match this is, adds the event and match: FRC_yyyyMMdd_HHmmss_{event}_{match}. The match is a letter
+ * for the type (p practice, q qualification, e elimination) and the number; the event may be missing.
  */
 export function fileStamp(name: string): { unix: number; id?: MatchId } | undefined {
-  const m = /FRC_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})(?:_([A-Za-z0-9]+?)_([pqe])(\d+))?(?:\D|$)/i.exec(name.replace(/^.*[\/\\]/, ''));
+  const base = name
+    .replace(/^.*[/\\]/, '')
+    .replace(/\.wpilog$/i, '')
+    .replace(/\s*\(\d+\)$/, ''); // "FRC_… (1).wpilog": a copy
+  const m = /^FRC_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})((?:_[A-Za-z0-9]+)*)$/i.exec(base);
   if (!m) return undefined;
   const [, y, mo, d, h, mi, s] = m.slice(1, 7).map(Number);
   const unix = Date.UTC(y, mo - 1, d, h, mi, s) / 1000;
-  const type = m[8] ? matchKindOf(m[8]) : undefined;
-  return { unix, id: type ? { event: m[7], type, number: Number(m[9]) } : undefined };
+  const rest = m[7].split('_').filter(Boolean);
+  const match = /^([pqe])(\d+)$/i.exec(rest[rest.length - 1] ?? '');
+  const type = match ? matchKindOf(match[1]) : undefined;
+  const event = rest.slice(0, -1).join('_') || undefined;
+  return { unix, id: match && type ? { event, type, number: Number(match[2]) } : undefined };
 }

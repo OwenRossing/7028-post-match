@@ -176,6 +176,14 @@ describe('helpers', () => {
     expect(off).toBeCloseTo(1_767_225_600, 3); // unix = logTime + offset
   });
 
+  it('trusts the last clock reading: the DS sets the roboRIO clock when it connects', () => {
+    const w = new WPILogWriter();
+    const c = w.start('systemTime', 'int64');
+    w.int64(c, 1, 1_767_225_000_000_000 + 1_000_000); // before the DS connected: 10 minutes off
+    w.int64(c, 50, 1_767_225_600_000_000 + 50_000_000); // after: right
+    expect(clockOffset(parseWPILog(w.bytes()))).toBeCloseTo(1_767_225_600, 3);
+  });
+
   it('has no clock when systemTime is missing', () => {
     expect(clockOffset(parseWPILog(new WPILogWriter().bytes()))).toBeUndefined();
   });
