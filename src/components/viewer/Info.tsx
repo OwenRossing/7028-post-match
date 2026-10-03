@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { diagnosticsText, robotLogDiagnostics } from '../../lib/diagnostics';
 import { fmtDateTime, fmtSpan } from '../../lib/time';
+import { CopyDiagnostics } from './CopyDiagnostics';
 import { RobotLogCard, robotSummary } from './RobotLogCard';
 import type { ViewCtx } from './types';
 
@@ -8,6 +10,8 @@ interface Item {
   title: string;
   summary: string;
   body: ReactNode;
+  /** Shown under the body when the row is open. */
+  extra?: ReactNode;
 }
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -167,6 +171,13 @@ export function Info({ ctx }: { ctx: ViewCtx }) {
           </div>
         </>
       ),
+      extra: parsed.extras.length ? (
+        <CopyDiagnostics
+          build={() => robotLogDiagnostics(parsed.extras)}
+          label="Copy robot log diagnostics"
+          note="Every signal in the robot logs, with its type and units, and how they lined up. Paste it when a robot log looks wrong or you want a signal charted."
+        />
+      ) : undefined,
     },
     {
       id: 'files',
@@ -195,6 +206,7 @@ export function Info({ ctx }: { ctx: ViewCtx }) {
           ]}
         />
       ),
+      extra: <CopyDiagnostics build={() => diagnosticsText(entry, parsed)} />,
     },
   ];
 
@@ -256,7 +268,12 @@ export function Info({ ctx }: { ctx: ViewCtx }) {
                   <span className="g-name">{it.title}</span>
                   <span className="info-sum">{it.summary}</span>
                 </div>
-                {on && <div className="info-body">{it.body}</div>}
+                {on && (
+                  <div className="info-body">
+                    {it.body}
+                    {it.extra}
+                  </div>
+                )}
               </div>
             );
           })}

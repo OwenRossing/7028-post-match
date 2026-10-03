@@ -74,6 +74,10 @@ export interface DSLog {
   pdTemp: Float32Array;
   /** True when the file ends partway through a record (e.g. the DS is still writing it). */
   truncated: boolean;
+  /** How many records carried each power distribution type byte (33 REV PDH, 25 CTRE PDP, anything else is not decoded). For diagnosing. */
+  typeBytes: Record<number, number>;
+  /** The raw bytes of the first record that had power distribution data, for diagnosing a decode that looks wrong. */
+  pdSample?: { index: number; bytes: number[] };
 }
 
 function recordSize(typeByte: number): number {
@@ -106,10 +110,12 @@ export function parseDSLog(bytes: Uint8Array): DSLog {
   let pos = HEADER_SIZE;
   let revCount = 0;
   let ctreCount = 0;
+  const typeBytes: Record<number, number> = {};
   while (pos + BASE_RECORD <= len) {
     const type = bytes[pos + 13];
     const size = recordSize(type);
     if (pos + size > len) break;
+    typeBytes[type] = (typeBytes[type] ?? 0) + 1;
     if (type === REV_ID) revCount++;
     else if (type === CTRE_ID) ctreCount++;
     count++;
@@ -134,6 +140,7 @@ export function parseDSLog(bytes: Uint8Array): DSLog {
   const totalCurrent = new Float32Array(count).fill(NaN);
   const pdTemp = new Float32Array(count).fill(NaN);
   let pdCanId: number | null = null;
+  let pdSample: DSLog['pdSample'];
 
   // Pass 2: decode.
   pos = HEADER_SIZE;
@@ -159,6 +166,7 @@ export function parseDSLog(bytes: Uint8Array): DSLog {
       // Stale power distribution data is repeated while disconnected; leave it as NaN.
     } else if (type === REV_ID) {
       pdKind[i] = PD_REV;
+      if (!pdSample) pdSample = { index: i, bytes: [...bytes.subarray(pos, pos + recordSize(type))] };
       pdCanId = bytes[pd];
       const base = pd + 1;
       let total = 0;
@@ -177,6 +185,7 @@ export function parseDSLog(bytes: Uint8Array): DSLog {
       pdTemp[i] = bytes[base + 31];
     } else if (type === CTRE_ID) {
       pdKind[i] = PD_CTRE;
+      if (!pdSample) pdSample = { index: i, bytes: [...bytes.subarray(pos, pos + recordSize(type))] };
       pdCanId = bytes[pd];
       const base = pd + 1;
       let total = 0;
@@ -220,6 +229,8 @@ export function parseDSLog(bytes: Uint8Array): DSLog {
     totalCurrent,
     pdTemp,
     truncated,
+    typeBytes,
+    pdSample,
   };
 }
 

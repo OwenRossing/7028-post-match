@@ -6,6 +6,8 @@ import { fmtDateTime } from '../../lib/time';
 import { FileChips } from '../FileChips';
 import { Scrim } from '../Scrim';
 import { useState } from 'react';
+import { robotLogDiagnostics } from '../../lib/diagnostics';
+import { CopyDiagnostics } from './CopyDiagnostics';
 import { RobotLogCard } from './RobotLogCard';
 
 /**
@@ -89,6 +91,13 @@ export function RobotOnly({
               Add robot logs
             </button>
           </div>
+          {info && info.length > 0 && (
+            <CopyDiagnostics
+              build={() => robotLogDiagnostics(info)}
+              label="Copy robot log diagnostics"
+              note="Every signal in the robot logs, with its type and units. Paste it when a robot log looks wrong or you want a signal charted."
+            />
+          )}
         </section>
       </div>
     </div>
