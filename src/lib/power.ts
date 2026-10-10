@@ -51,8 +51,10 @@ export interface PowerRow {
 }
 
 export interface PowerReport {
-  /** The record where the battery was lowest while the robot was enabled. */
+  /** The record where the battery was lowest while the robot was enabled and something has a reading. */
   low: { index: number; volts: number } | null;
+  /** The battery's real lowest point when nothing has a reading there (the board's readings were junk), else null. */
+  missed: { index: number; volts: number } | null;
   /** The robot's total current at that moment: the board's own total, or the sum of what is listed. */
   total: number | null;
   totalIsSum: boolean;
@@ -77,11 +79,17 @@ export function powerReport(log: DSLog, sources: PowerSource[]): PowerReport {
   // a log with no enabled time (a pit check) is judged over everything the robot was connected for
   const span = enabled.length ? enabled : Array.from({ length: log.count }, (_, i) => i).filter((i) => log.comms[i] === 1);
 
+  // the low point has to be somewhere a reading exists, or there is nothing to say about who drew what then
+  const covered = (i: number) => sources.length === 0 || sources.some((s) => !Number.isNaN(s.arr[i]));
   let low: PowerReport['low'] = null;
+  let lowest: PowerReport['low'] = null;
   for (const i of span) {
     const v = log.voltage[i];
-    if (Number.isFinite(v) && (!low || v < low.volts)) low = { index: i, volts: v };
+    if (!Number.isFinite(v)) continue;
+    if (!lowest || v < lowest.volts) lowest = { index: i, volts: v };
+    if ((!low || v < low.volts) && covered(i)) low = { index: i, volts: v };
   }
+  const missed = lowest && low && lowest.index !== low.index && lowest.volts < low.volts - 0.05 ? lowest : null;
 
   const rows: PowerRow[] = [];
   for (const source of sources) {
@@ -110,7 +118,7 @@ export function powerReport(log: DSLog, sources: PowerSource[]): PowerReport {
       totalIsSum = true;
     }
   }
-  return { low, total, totalIsSum, rows };
+  return { low, missed, total, totalIsSum, rows };
 }
 
 /** The robot's total current within `win` records of one (the board's own total, NaN where it has none). */
@@ -136,6 +144,8 @@ export function drawAt(sources: PowerSource[], index: number, n = 3): { source: 
 export interface PdStatus {
   kind: 'ok' | 'none' | 'unknown' | 'idle' | 'frozen';
   text: string;
+  /** Said when part of the board's readings were junk and are left out. */
+  junk?: string;
 }
 
 /** Messages that say the roboRIO's CAN reads timed out ("CAN message is stale", "CAN frame not received/too-stale"). */
@@ -148,7 +158,7 @@ const KNOWN_PD = new Set([0, 25, 33]);
  * nothing to graph, and which way it fails (never reported, a type not decoded, or decoded but never above 1 A) decides what to
  * do about it.
  */
-export function pdStatus(log: DSLog): PdStatus {
+function pdStatusBase(log: DSLog): PdStatus {
   if (log.pdFrozen) {
     const name = log.pdType === 'ctre' ? 'PDP' : 'PDH';
     let lo = Infinity;
@@ -179,3 +189,19 @@ export function pdStatus(log: DSLog): PdStatus {
   if (!used) return { kind: 'idle', text: 'The power distribution board was recorded, but every channel stayed under 1 A: the robot was probably not driven.' };
   return { kind: 'ok', text: `The ${log.pdType === 'rev' ? 'REV PDH' : 'CTRE PDP'} was recorded${unknownCount ? `, along with ${unknownCount.toLocaleString('en-US')} records of a type PitView does not decode (${types})` : ''}.` };
 }
+
+/** What the Driver Station log says about the board, and whether part of it was junk. */
+export function pdStatus(log: DSLog, fmt: (t: number) => string = fmtClock): PdStatus {
+  const status = pdStatusBase(log);
+  if (!log.pdJunk) return status;
+  const { records, first, last } = log.pdJunk;
+  const secs = (records * log.period).toFixed(1);
+  const at = (i: number) => fmt(i * log.period);
+  const end = log.comms.slice(last + 1).every((c) => !c) ? 'the end' : at(last);
+  return {
+    ...status,
+    junk: `${records.toLocaleString('en-US')} of the board's records (${secs} s in all, from ${at(first)} to ${end}) were not real readings: the board repeated the same bytes, or filled several channels with the same 71.9 A, or showed the four small channels all reading alike. PitView leaves them out, so nothing is counted for that time.`,
+  };
+}
+
+const fmtClock = (t: number) => `${Math.floor(t / 60)}:${(t % 60).toFixed(1).padStart(4, '0')}`;

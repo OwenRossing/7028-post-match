@@ -84,7 +84,26 @@ export interface DSLog {
    * readings from the board. The channels are then left out (`channelCount` 0, no currents) rather than graphed as zeros.
    */
   pdFrozen: { records: number; temp: number } | null;
+  /**
+   * Records whose power distribution reading is not a measurement, left as NaN. A REV PDH log has three kinds: a fill pattern
+   * (three or more channels reading exactly 71.875 A, raw 0x23f, which real logs show on 4 channels at a time), the four small
+   * channels (20-23, separate loads) all reading the same current, and a stale hold (the very same bytes for 8+ records while
+   * the board claims 10 A or more, which is the roboRIO repeating the last frame while the board is not being heard). Records
+   * between two of these less than a second apart are left out too: the board's feed is broken there, and what looks fine is
+   * usually an old frame coming round again. `first` and `last` are record indexes of the first and last one.
+   */
+  pdJunk: { records: number; first: number; last: number } | null;
 }
+
+/** Four small channels all at this raw value or more (1 A) are not four loads. */
+const JUNK_MIN = 16;
+/** Raw 10-bit value (71.875 A) a board fills several channels with when it has nothing to say. */
+const FILL = 0x23f;
+/** The same reading this many records in a row (0.16 s), claiming at least this many amps in all, is a stale hold. */
+const STALE_RUN = 8;
+const STALE_AMPS = 10;
+/** Junk records closer together than this many records (1 s) are one broken stretch: what sits between them is not trusted either. */
+const EPISODE_GAP = 50;
 
 /** A reading that never changes for this many connected records (5 s) is not a live one. */
 const FROZEN_MIN = 250;
@@ -152,6 +171,29 @@ export function parseDSLog(bytes: Uint8Array): DSLog {
   let pdSample: DSLog['pdSample'];
   let pdRecords = 0;
   let pdChanged = false;
+  let junkRecords = 0;
+  let junkFirst = -1;
+  let junkLast = -1;
+  let runStart = -1;
+  let runLen = 0;
+  let runPayload: Uint8Array | undefined;
+  const junkAt: number[] = [];
+  const junk = (i: number) => {
+    junkAt.push(i);
+    for (const c of currents) c[i] = NaN;
+    totalCurrent[i] = NaN;
+    pdTemp[i] = NaN;
+    pdKind[i] = 0;
+    junkRecords++;
+    if (junkFirst < 0 || i < junkFirst) junkFirst = i;
+    if (i > junkLast) junkLast = i;
+  };
+  const endRun = () => {
+    if (runLen >= STALE_RUN && totalCurrent[runStart] >= STALE_AMPS) for (let k = runStart; k < runStart + runLen; k++) junk(k);
+    runStart = -1;
+    runLen = 0;
+    runPayload = undefined;
+  };
   let firstPd: Uint8Array | undefined;
   let firstPdAt = -1;
 
@@ -188,6 +230,16 @@ export function parseDSLog(bytes: Uint8Array): DSLog {
       if (!pdSample) pdSample = { index: i, bytes: [...bytes.subarray(pos, pos + recordSize(type))] };
       pdCanId = bytes[pd];
       const base = pd + 1;
+      let fill = 0;
+      for (let ch = 0; ch < 20; ch++) if (((view.getUint32(base + Math.floor(ch / 3) * 4, true) >>> ((ch % 3) * 10)) & 0x3ff) === FILL) fill++;
+      const small = bytes[base + 27];
+      const alike = small >= JUNK_MIN && small === bytes[base + 28] && small === bytes[base + 29] && small === bytes[base + 30];
+      if (fill >= 3 || alike) {
+        endRun();
+        junk(i);
+        pos += recordSize(type);
+        continue;
+      }
       let total = 0;
       for (let ch = 0; ch < 20; ch++) {
         const word = view.getUint32(base + Math.floor(ch / 3) * 4, true);
@@ -202,6 +254,12 @@ export function parseDSLog(bytes: Uint8Array): DSLog {
       }
       totalCurrent[i] = total;
       pdTemp[i] = bytes[base + 31];
+      const payload = bytes.subarray(pd, pd + REV_SIZE);
+      if (runPayload && runStart + runLen === i && payload.every((v, k) => v === runPayload![k])) runLen++;
+      else {
+        endRun();
+        [runStart, runLen, runPayload] = [i, 1, payload];
+      }
     } else if (type === CTRE_ID) {
       pdKind[i] = PD_CTRE;
       if (!pdSample) pdSample = { index: i, bytes: [...bytes.subarray(pos, pos + recordSize(type))] };
@@ -223,6 +281,12 @@ export function parseDSLog(bytes: Uint8Array): DSLog {
       pdTemp[i] = bytes[base + 23];
     }
     pos += recordSize(type);
+  }
+
+  endRun();
+  const seeds = [...junkAt].sort((a, b) => a - b);
+  for (let n = 1; n < seeds.length; n++) {
+    if (seeds[n] - seeds[n - 1] <= EPISODE_GAP) for (let k = seeds[n - 1] + 1; k < seeds[n]; k++) if (Number.isFinite(totalCurrent[k])) junk(k);
   }
 
   // A board that reports the same thing in every record, all zeros, is not being read: keep nothing of it
@@ -264,6 +328,7 @@ export function parseDSLog(bytes: Uint8Array): DSLog {
     typeBytes,
     pdSample,
     pdFrozen,
+    pdJunk: junkRecords ? { records: junkRecords, first: junkFirst, last: junkLast } : null,
   };
 }
 

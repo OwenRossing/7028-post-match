@@ -21,7 +21,7 @@ export function PowerCard({ ctx, sources, report }: { ctx: ViewCtx; sources: Pow
   const log = parsed.log!;
   const [by, setBy] = useState<PowerSort>('low');
   const [all, setAll] = useState(false);
-  const pd = pdStatus(log);
+  const pd = pdStatus(log, tf.fmt);
   const stale = canStaleCount(parsed.events?.events);
   const lowT = report.low ? report.low.index * log.period : null;
 
@@ -105,6 +105,12 @@ export function PowerCard({ ctx, sources, report }: { ctx: ViewCtx; sources: Pow
         ) : (
           <p className="pw-line">No battery voltage was recorded while the robot was connected.</p>
         )}
+        {report.missed && (
+          <p className="pw-line pw-note">
+            The battery went lowest, <b>{report.missed.volts.toFixed(2)} V</b> at <b>{tf.fmt(report.missed.index * log.period)}</b>, where the board's readings were junk (below), so the point above is the lowest one that has readings.
+          </p>
+        )}
+        {pd.junk && <p className="pw-line pw-note">Driver Station log: {pd.junk}</p>}
         {pd.kind !== 'ok' && <p className="pw-line pw-note">Driver Station log: {pd.text} These are the robot logs' motor currents.</p>}
         <table className="pw-table">
           <thead>

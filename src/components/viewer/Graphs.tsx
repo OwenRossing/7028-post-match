@@ -746,6 +746,7 @@ export function Graphs({
               <section key={sec} className="g-sec">
                 <h2>{sec}</h2>
                 {rows.map((s) => [signalRow(s), s.id === 'total' && log.channelCount ? channelsGroup() : null])}
+                {sec === 'Power' && log.channelCount > 0 && pdStatus(log, tf.fmt).junk && <p className="g-note">{pdStatus(log, tf.fmt).junk}</p>}
                 {sec === 'Power' && !log.channelCount && (
                   <p className="g-note">
                     {pdStatus(log).kind === 'frozen'

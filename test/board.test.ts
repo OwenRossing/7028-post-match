@@ -43,7 +43,10 @@ describe('board for the sample match', () => {
       mah.reduce((a, b) => a + b, 0),
       -1,
     );
-    expect(rowById(board, 'power.peak').value).toBeGreaterThan(400);
+    // the 408 A this log once showed was nine records of the board's 71.9 A fill pattern (four channels at exactly 71.875 A): not a measurement
+    const peak = rowById(board, 'power.peak').value;
+    expect(peak).toBeGreaterThan(200);
+    expect(peak).toBeLessThan(300);
   });
 
   it('counts CAN warnings per device', () => {

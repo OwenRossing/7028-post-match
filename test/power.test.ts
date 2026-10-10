@@ -53,6 +53,19 @@ describe('the battery low point and who drew what', () => {
     expect(x.mean).toBeCloseTo((10 * 19 + 50 + 80) / 21, 6); // the 21 enabled records
   });
 
+  it('puts the low point where a reading exists, and says so when the real lowest was not covered', () => {
+    const a = new Float32Array(40).fill(5);
+    for (let i = 30; i < 40; i++) a[i] = NaN; // junk readings were left out here
+    const log = fake(40, [10, 39], { voltage: Float32Array.from({ length: 40 }, (_, i) => (i === 35 ? 5.5 : i === 20 ? 7 : 12)) });
+    const r = powerReport(log, [{ id: 'ch0', name: 'Shooter', kind: 'channel', arr: a }]);
+    expect(r.low).toEqual({ index: 20, volts: expect.closeTo(7, 5) });
+    expect(r.missed).toEqual({ index: 35, volts: expect.closeTo(5.5, 5) });
+    // a robot log that covers the whole match has the true low point
+    const whole = powerReport(log, [{ id: 'm:0', name: 'TalonFX 1 · Supply', kind: 'motor', arr: new Float32Array(40).fill(30) }]);
+    expect(whole.low!.index).toBe(35);
+    expect(whole.missed).toBeNull();
+  });
+
   it('does not credit a draw that is more than 0.1 s from the low point', () => {
     const a = new Float32Array(40).fill(5);
     a[20] = 50;
@@ -165,6 +178,15 @@ describe('what the Driver Station log says about the board', () => {
   it('does not mention a battery swing that was not there', () => {
     const s = pdStatus(fake(1000, [0, 999], { pdType: 'ctre', pdCanId: 0, pdFrozen: { records: 1000, temp: NaN } }));
     expect(s.text).toMatch(/identical PDP reading \(CAN ID 0\) in all 1,000 records while connected: every channel 0 A\. A live board/);
+  });
+
+  it('adds what was junk to an otherwise good board, with when and for how long', () => {
+    const log = fake(30000, [0, 29999], { typeBytes: { 33: 30000 }, pdType: 'rev', channelCount: 1, currents: [new Float32Array(30000).fill(5)], pdJunk: { records: 1930, first: 26915, last: 28844 }, comms: Uint8Array.from({ length: 30000 }, (_, i) => (i <= 28844 ? 1 : 0)) });
+    const s = pdStatus(log);
+    expect(s.kind).toBe('ok');
+    expect(s.junk).toMatch(/1,930 of the board's records \(38\.6 s in all, from 8:58\.3 to the end\) were not real readings/);
+    expect(pdStatus(log, (t) => `T${t.toFixed(0)}`).junk).toMatch(/from T538 to the end/);
+    expect(pdStatus(fake(100, [0, 99], { typeBytes: { 33: 100 }, pdType: 'rev', channelCount: 1, currents: [new Float32Array(100).fill(5)], pdJunk: null })).junk).toBeUndefined();
   });
 
   it('counts the CAN reads that timed out', () => {

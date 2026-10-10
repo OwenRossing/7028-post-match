@@ -158,6 +158,78 @@ describe('dslog decoding (synthetic)', () => {
     });
   });
 
+  describe('junk readings from a board that is answering', () => {
+    const small = (v: number) => Array.from({ length: 24 }, (_, c) => (c >= 20 ? v : c === 2 ? 71.875 : 0));
+    const build = (junkFrom: number) => {
+      const out: number[] = [];
+      for (let i = 0; i < 20; i++) {
+        const junk = i >= junkFrom;
+        // healthy records differ record to record, so this log is not 'frozen'
+        out.push(...record({ flags: TELEOP, volts: 12 - i * 0.2, pd: 'rev', currents: junk ? small(63 / 16) : Array.from({ length: 24 }, (_, c) => (c === 2 ? 10 + i : c === 21 ? 0.5 : 0)) }));
+      }
+      return parseDSLog(new Uint8Array([...header(1_700_000_000), ...out]));
+    };
+
+    it('leaves a record out when the four small channels all read the same current of 1 A or more', () => {
+      const log = build(12);
+      expect(log.pdJunk).toEqual({ records: 8, first: 12, last: 19 });
+      expect(log.currents[2][11]).toBeCloseTo(21, 3);
+      for (let i = 12; i < 20; i++) {
+        expect(log.currents[2][i]).toBeNaN();
+        expect(log.currents[21][i]).toBeNaN();
+        expect(log.totalCurrent[i]).toBeNaN();
+      }
+      expect(log.channelCount).toBe(24);
+      expect(log.pdFrozen).toBeNull();
+    });
+
+    it('leaves out the board\'s 71.875 A fill pattern when three or more channels carry it', () => {
+      const out: number[] = [];
+      const cur = (i: number, fill: number) => Array.from({ length: 24 }, (_, c) => ([0, 1, 18, 19].slice(0, fill).includes(c) ? 71.875 : c === 2 ? 10 + i : c === 21 ? 0.5 : 0));
+      for (let i = 0; i < 6; i++) out.push(...record({ flags: TELEOP, volts: 10, pd: 'rev', currents: cur(i, i < 3 ? 0 : i === 3 ? 2 : 4) }));
+      const log = parseDSLog(new Uint8Array([...header(1_700_000_000), ...out]));
+      expect(log.pdJunk).toEqual({ records: 2, first: 4, last: 5 }); // four channels: junk; two channels is a coincidence, kept
+      expect(log.currents[0][3]).toBeCloseTo(71.875, 3);
+      expect(log.currents[0][4]).toBeNaN();
+    });
+
+    it('leaves out a stale hold: the same busy reading for 8+ records, but not a quiet one or a short one', () => {
+      const busy = (n: number, base: number) => {
+        const out: number[] = [];
+        for (let i = 0; i < n; i++) out.push(...record({ flags: TELEOP, volts: 9 + (i % 3), pd: 'rev', currents: Array.from({ length: 24 }, (_, c) => (c === 2 ? base : c === 5 ? 6 : 0)) }));
+        return out;
+      };
+      // 5 records of one reading (a board that updates every 100 ms), 14 of a second (stale), 14 of a quiet one, then 3 different
+      const out = [...busy(5, 20), ...busy(14, 30), ...Array.from({ length: 14 }).flatMap(() => record({ flags: TELEOP, volts: 12, pd: 'rev', currents: [1, 0.5] })), ...busy(1, 41), ...busy(1, 42), ...busy(1, 43)];
+      const log = parseDSLog(new Uint8Array([...header(1_700_000_000), ...out]));
+      expect(log.pdJunk).toEqual({ records: 14, first: 5, last: 18 });
+      expect(log.currents[2][4]).toBeCloseTo(20, 3); // the short hold is a real update
+      expect(log.currents[2][5]).toBeNaN();
+      expect(log.currents[0][20]).toBeCloseTo(1, 3); // a quiet board can sit still
+      expect(log.currents[2][35]).toBeCloseTo(43, 3);
+    });
+
+    it('distrusts the records between junk ones less than a second apart, and keeps them when the junk is far apart', () => {
+      const rec = (i: number, junk: boolean) => record({ flags: TELEOP, volts: 10, pd: 'rev', currents: junk ? small(63 / 16) : Array.from({ length: 24 }, (_, c) => (c === 2 ? 10 + (i % 90) : 0)) });
+      const near = parseDSLog(new Uint8Array([...header(1_700_000_000), ...Array.from({ length: 30 }).flatMap((_, i) => rec(i, i === 5 || i === 25))]));
+      expect(near.pdJunk).toEqual({ records: 21, first: 5, last: 25 }); // the 19 records between are left out too
+      expect(near.currents[2][4]).toBeCloseTo(14, 3);
+      expect(near.currents[2][15]).toBeNaN();
+      const far = parseDSLog(new Uint8Array([...header(1_700_000_000), ...Array.from({ length: 130 }).flatMap((_, i) => rec(i, i === 5 || i === 125))]));
+      expect(far.pdJunk).toEqual({ records: 2, first: 5, last: 125 });
+      expect(far.currents[2][60]).toBeCloseTo(70, 3);
+    });
+
+    it('does not call four idle channels at 0 A junk, nor three equal and one different', () => {
+      const out: number[] = [];
+      for (let i = 0; i < 10; i++) out.push(...record({ flags: TELEOP, volts: 12, pd: 'rev', currents: Array.from({ length: 24 }, (_, c) => (c === 2 ? 5 + i : c === 23 ? 1 : c >= 20 ? 3 : 0)) }));
+      for (let i = 0; i < 10; i++) out.push(...record({ flags: TELEOP, volts: 12, pd: 'rev', currents: Array.from({ length: 24 }, (_, c) => (c === 2 ? 5 + i : 0)) }));
+      const log = parseDSLog(new Uint8Array([...header(1_700_000_000), ...out]));
+      expect(log.pdJunk).toBeNull();
+      expect(log.currents[2][5]).toBeCloseTo(10, 3);
+    });
+  });
+
   it('rejects old v3 logs with a helpful message', () => {
     const bytes = new Uint8Array(header(0));
     new DataView(bytes.buffer).setInt32(0, 3);
